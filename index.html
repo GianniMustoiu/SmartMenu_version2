@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MenuPro Admin – Demo</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
+</head>
+<body>
+  <!-- LOGIN -->
+  <div id="login-screen" class="login-screen">
+    <div class="login-card">
+      <div class="logo">
+        <i class="fas fa-utensils"></i>
+        <h1>MenuPro</h1>
+        <p>Pannello Amministratore – Demo</p>
+      </div>
+      <form id="login-form">
+        <div class="form-group">
+          <label>Email</label>
+          <input type="email" id="login-email" placeholder="admin@menupro.it" required />
+        </div>
+        <div class="form-group">
+          <label>Password</label>
+          <input type="password" id="login-password" placeholder="••••••••" required />
+        </div>
+        <button type="submit" class="btn btn-primary btn-block">
+          <i class="fas fa-sign-in-alt"></i> Accedi
+        </button>
+        <p class="hint">Demo: usa qualsiasi email e password (min 4 caratteri)</p>
+      </form>
+    </div>
+  </div>
+
+  <!-- APP -->
+  <div id="app" class="app hidden">
+    <!-- SIDEBAR -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <i class="fas fa-utensils"></i>
+        <span>MenuPro</span>
+      </div>
+      <nav>
+        <a href="#" class="nav-item active" data-page="dashboard">
+          <i class="fas fa-chart-pie"></i> Panoramica
+        </a>
+        <a href="#" class="nav-item" data-page="ristoranti">
+          <i class="fas fa-store"></i> Ristoranti
+        </a>
+        <a href="#" class="nav-item" data-page="impostazioni">
+          <i class="fas fa-cog"></i> Impostazioni
+        </a>
+      </nav>
+      <div class="sidebar-footer">
+        <button id="theme-toggle" class="btn-icon" title="Cambia tema">
+          <i class="fas fa-moon"></i>
+        </button>
+        <button id="logout-btn" class="btn-icon" title="Esci">
+          <i class="fas fa-sign-out-alt"></i>
+        </button>
+      </div>
+    </aside>
+
+    <!-- MAIN -->
+    <main class="main">
+      <header class="topbar">
+        <h2 id="page-title">Panoramica</h2>
+        <div class="topbar-right">
+          <span id="user-email"></span>
+        </div>
+      </header>
+
+      <!-- DASHBOARD -->
+      <section id="page-dashboard" class="page">
+        <div class="cards">
+          <div class="card">
+            <div class="card-icon blue"><i class="fas fa-store"></i></div>
+            <div>
+              <h3 id="stat-ristoranti">0</h3>
+              <p>Ristoranti</p>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-icon green"><i class="fas fa-chair"></i></div>
+            <div>
+              <h3 id="stat-tavoli">0</h3>
+              <p>Tavoli totali</p>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-icon orange"><i class="fas fa-user-tie"></i></div>
+            <div>
+              <h3 id="stat-ristoratori">0</h3>
+              <p>Ristoratori</p>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-icon purple"><i class="fas fa-calendar-check"></i></div>
+            <div>
+              <h3 id="stat-attivi">0</h3>
+              <p>Piani attivi</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="recent-box">
+          <h3>Ultimi ristoranti creati</h3>
+          <div id="recent-list" class="recent-list"></div>
+        </div>
+      </section>
+
+      <!-- RISTORANTI -->
+      <section id="page-ristoranti" class="page hidden">
+        <div class="toolbar">
+          <div class="search-box">
+            <i class="fas fa-search"></i>
+            <input type="text" id="search-ristoranti" placeholder="Cerca ristorante, città o titolare..." />
+          </div>
+          <button id="btn-nuovo" class="btn btn-primary">
+            <i class="fas fa-plus"></i> Nuovo ristorante
+          </button>
+        </div>
+
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Nome</th>
+                <th>Titolare</th>
+                <th>Città</th>
+                <th>Tavoli</th>
+                <th>Piano</th>
+                <th>Scadenza</th>
+                <th>Azioni</th>
+              </tr>
+            </thead>
+            <tbody id="ristoranti-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- IMPOSTAZIONI -->
+      <section id="page-impostazioni" class="page hidden">
+        <div class="settings-card">
+          <h3>Impostazioni Demo</h3>
+          <p>Questa è una versione dimostrativa senza database. Tutti i dati sono salvati solo nel browser (localStorage).</p>
+          <button id="btn-reset" class="btn btn-danger">
+            <i class="fas fa-trash"></i> Cancella tutti i dati demo
+          </button>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- MODAL NUOVO / MODIFICA -->
+  <div id="modal" class="modal hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 id="modal-title">Nuovo ristorante</h3>
+        <button class="close-modal">&times;</button>
+      </div>
+      <form id="form-ristorante">
+        <input type="hidden" id="edit-id" />
+        <div class="form-row">
+          <div class="form-group">
+            <label>Nome ristorante *</label>
+            <input type="text" id="nome" required maxlength="50" />
+          </div>
+          <div class="form-group">
+            <label>Titolare</label>
+            <input type="text" id="titolare" maxlength="80" />
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Città</label>
+            <input type="text" id="citta" maxlength="50" />
+          </div>
+          <div class="form-group">
+            <label>N° tavoli</label>
+            <input type="number" id="n_tavoli" min="1" max="200" value="8" />
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Email ristoratore *</label>
+            <input type="email" id="email" required />
+          </div>
+          <div class="form-group">
+            <label>Password *</label>
+            <input type="password" id="password" minlength="6" required />
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Piano</label>
+            <select id="id_piano">
+              <option value="base">Base</option>
+              <option value="pro">Pro</option>
+              <option value="enterprise">Enterprise</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Scadenza</label>
+            <input type="date" id="scadenza" />
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary close-modal">Annulla</button>
+          <button type="submit" class="btn btn-primary">Salva</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- TOAST -->
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="script.js"></script>
+</body>
+</html>
