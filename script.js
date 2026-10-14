@@ -14,6 +14,8 @@ try {
 } catch (e) {
   console.error('Errore init Supabase:', e);
 }
+window.sb = sb; // per debug in console
+if (!sb) console.warn('ATTENZIONE: sb è null — controlla config.js');
 
 let currentUser = null;
 let currentRistorante = null;
@@ -433,6 +435,7 @@ async function renderAdminTable(filter = '') {
       <td>${r.scadenza || '—'}</td>
       <td class="actions">
         <button class="btn btn-secondary btn-sm" onclick="editRistorante('${r.id}')" title="Modifica"><i class="fas fa-edit"></i></button>
+        <button class="btn btn-secondary btn-sm" onclick="apriResetPassword('${r.id}')" title="Nuova password"><i class="fas fa-key"></i></button>
         <button class="btn btn-secondary btn-sm" onclick="adminApriMenu('${r.id}')" title="Gestisci menu"><i class="fas fa-book-open"></i></button>
         <button class="btn btn-danger btn-sm" onclick="deleteRistorante('${r.id}')" title="Elimina"><i class="fas fa-trash"></i></button>
       </td>
@@ -1441,12 +1444,21 @@ async function renderTavoli() {
   });
 }
 
-$('#btn-nuova-sala')?.addEventListener('click', async () => {
-  const nome = prompt('Nome nuova sala:');
-  if (!nome || !nome.trim()) return;
-  const sale = [...(currentRistorante.sale || []), nome.trim()];
-  await sb.from('ristoranti').update({ sale }).eq('id', currentRistorante.id);
+$('#btn-nuova-sala')?.addEventListener('click', () => {
+  $('#form-sala')?.reset();
+  $('#modal-sala')?.classList.remove('hidden');
+});
+
+$('#form-sala')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const nome = ($('#sala-nome')?.value || '').trim();
+  if (!nome || !currentRistorante) return;
+  if (!sb) { toast('Database non collegato'); return; }
+  const sale = [...(currentRistorante.sale || []), nome];
+  const { error } = await sb.from('ristoranti').update({ sale }).eq('id', currentRistorante.id);
+  if (error) { toast('Errore: ' + error.message); return; }
   currentRistorante.sale = sale;
+  $('#modal-sala').classList.add('hidden');
   await renderTavoli();
   toast('Sala aggiunta');
 });
@@ -1466,29 +1478,25 @@ window.showQR = function(tavolo) {
   $('#modal-qr').classList.remove('hidden');
 };
 
-$('#btn-demo-ristoratore')?.addEventListener('click', async () => {
-  const ristoranti = await loadRistoranti();
-  if (!ristoranti.length) { toast('Crea prima un ristorante'); return; }
-  const sel = $('#demo-ristoratore-select');
-  sel.innerHTML = ristoranti.map(r => `<option value="${r.id}">${r.nome}</option>`).join('');
+$('#btn-demo-ristoratore')?.addEventListener('click', () => {
+  if ($('#demo-rist-email')) $('#demo-rist-email').value = '';
+  if ($('#demo-rist-password')) $('#demo-rist-password').value = '';
   $('#modal-demo-ristoratore').classList.remove('hidden');
 });
 
 $('#btn-avvia-demo-rist')?.addEventListener('click', async () => {
-  const id = $('#demo-ristoratore-select').value;
-  const r = await loadRistoranteFull(id);
-  if (!r) return;
-  currentUser = { role: 'ristoratore', email: r.email, ristoranteId: r.id, fromAdmin: true };
-  currentRistorante = r;
+  const email = ($('#demo-rist-email')?.value || '').trim().toLowerCase();
+  const pass = ($('#demo-rist-password')?.value || '').trim();
+  if (!email || !pass) { toast('Inserisci email e password'); return; }
   $('#modal-demo-ristoratore').classList.add('hidden');
-  $('#app-admin').classList.add('hidden');
-  $('#app-ristoratore').classList.remove('hidden');
-  $('#rist-nome-sidebar').textContent = r.nome + ' (demo)';
-  $('#rist-user-email').textContent = r.email;
-  await renderRistDashboard();
-  await renderMenuTable();
-  await renderOrdiniKanban();
-  await renderTavoli();
+  // riusa il login normale
+  const ok = await doLogin(email, pass);
+  if (!ok) {
+    $('#app-admin').classList.add('hidden');
+    $('#login-screen').classList.remove('hidden');
+  } else {
+    $('#app-admin').classList.add('hidden');
+  }
 });
 
 $('#btn-nuovo-tavolo')?.addEventListener('click', () => {
@@ -1654,27 +1662,78 @@ function renderCarrello() {
 
 $('#btn-invia-ordine')?.addEventListener('click', async () => {
   if (!cart.length) { toast('Il carrello è vuoto'); return; }
-  if (!currentRistorante) return;
+  if (!currentRistorante || !currentUser) {
+    toast('Sessione cliente non valida. Riscansiona il QR.');
+    return;
+  }
+  if (!sb) {
+    toast('Database non collegato: controlla config.js');
+    return;
+  }
 
   const totale = cart.reduce((s, c) => s + c.prezzo * c.qty, 0);
   const codice = 'ORD-' + Math.random().toString(36).slice(2, 8).toUpperCase();
   const pagamento = document.querySelector('input[name="pagamento"]:checked')?.value || 'carta';
   const stato_pagamento = defaultPagStato(pagamento);
+  const note = ($('#ordine-note')?.value || '').trim();
+  const tavoloNum = currentUser.tavolo;
 
-  const ordine = {
+  // Schema nuovo: senza colonna items (usa ordine_riga). Schema vecchio: con items jsonb.
+  const ordineBase = {
     id_ristorante: currentRistorante.id,
     codice,
-    tavolo: currentUser.tavolo,
-    items: cart.map(c => ({ id: c.id, nome: c.nome, prezzo: c.prezzo, qty: c.qty })),
-    note: $('#ordine-note').value.trim(),
+    tavolo: tavoloNum,
+    note,
     pagamento,
     stato_pagamento,
     totale,
     stato: 'nuovo'
   };
 
-  const { data: inserted, error } = await sb.from('ordini').insert(ordine).select().single();
-  if (error) { toast('Errore invio ordine'); console.error(error); return; }
+  let inserted = null;
+  let error = null;
+
+  // prova con items (schema vecchio)
+  ({ data: inserted, error } = await sb.from('ordini').insert({
+    ...ordineBase,
+    items: cart.map(c => ({ id: c.id, nome: c.nome, prezzo: c.prezzo, qty: c.qty }))
+  }).select().single());
+
+  // se fallisce per colonna items, riprova senza
+  if (error && String(error.message || '').toLowerCase().includes('items')) {
+    ({ data: inserted, error } = await sb.from('ordini').insert(ordineBase).select().single());
+  }
+
+  if (error || !inserted) {
+    toast('Errore invio ordine: ' + (error?.message || 'sconosciuto'));
+    console.error(error);
+    return;
+  }
+
+  // salva righe ordine se la tabella esiste
+  try {
+    const righe = cart.map(c => ({
+      id_ordine: inserted.id,
+      id_piatto: c.id || null,
+      piatto: c.nome,
+      qty_piatti: c.qty,
+      prezzo_pagato: Number(c.prezzo) * c.qty
+    }));
+    await sb.from('ordine_riga').insert(righe);
+  } catch (e) { console.warn('ordine_riga skip', e); }
+
+  try {
+    if (note) await sb.from('messaggio').insert({ id_ordine: inserted.id, testo: note });
+  } catch (e) { console.warn('messaggio skip', e); }
+
+  try {
+    await sb.from('pagamento').insert({
+      id_ordine: inserted.id,
+      metodo: pagamento,
+      importo: totale
+    });
+  } catch (e) { console.warn('pagamento skip', e); }
+
 
   await sb.from('tavoli').update({ occupato: true })
     .eq('id_ristorante', currentRistorante.id)
@@ -1694,7 +1753,7 @@ $('#btn-invia-ordine')?.addEventListener('click', async () => {
     $('#ricevuta-pag-stato').textContent = labelPagamentoStato(stato_pagamento);
     $('#ricevuta-pag-stato').className = 'badge-pag ' + stato_pagamento;
   }
-  $('#ricevuta-items').innerHTML = ordine.items.map(i => `
+  $('#ricevuta-items').innerHTML = cart.map(i => `
     <div class="r-item"><span>${i.qty}× ${i.nome}</span><span>${formatPrice(i.prezzo * i.qty)}</span></div>
   `).join('');
 
@@ -1752,26 +1811,118 @@ $('#btn-indietro-stato')?.addEventListener('click', () => {
   }
 });
 
+
+
+// =====================================================
+// CREA ADMIN + RESET PASSWORD
+// =====================================================
+$('#btn-crea-primo-admin')?.addEventListener('click', () => {
+  $('#form-crea-admin')?.reset();
+  $('#modal-crea-admin')?.classList.remove('hidden');
+});
+
+$('#form-crea-admin')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if (!sb) { toast('Database non collegato: controlla config.js'); return; }
+  const email = ($('#admin-email')?.value || '').trim().toLowerCase();
+  const password = ($('#admin-password')?.value || '').trim();
+  const nome = ($('#admin-nome')?.value || '').trim() || 'Amministratore';
+  if (!email || !password) { toast('Email e password obbligatorie'); return; }
+
+  const { error } = await sb.from('utenti').insert({
+    email,
+    password_hash: password,
+    ruolo: 'admin',
+    nome
+  });
+  if (error) {
+    toast('Errore: ' + error.message);
+    console.error(error);
+    return;
+  }
+  $('#modal-crea-admin').classList.add('hidden');
+  toast('Admin creato! Accedi con email e password');
+  if ($('#login-email')) $('#login-email').value = email;
+});
+
+window.apriResetPassword = async function(id) {
+  if (!sb) { toast('Database non collegato'); return; }
+  const { data: r } = await sb.from('ristoranti').select('*').eq('id', id).single();
+  if (!r) return;
+  $('#reset-pass-rist-id').value = r.id;
+  $('#reset-pass-email').value = r.email;
+  $('#reset-pass-nome').value = r.nome + ' (' + r.email + ')';
+  $('#reset-pass-value').value = '';
+  $('#modal-reset-pass').classList.remove('hidden');
+};
+
+$('#btn-genera-pass')?.addEventListener('click', () => {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+  let s = '';
+  for (let i = 0; i < 10; i++) s += chars[Math.floor(Math.random() * chars.length)];
+  $('#reset-pass-value').value = s;
+});
+
+$('#form-reset-pass')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if (!sb) { toast('Database non collegato'); return; }
+  const id = $('#reset-pass-rist-id').value;
+  const email = $('#reset-pass-email').value;
+  const nuova = ($('#reset-pass-value')?.value || '').trim();
+  if (!nuova || nuova.length < 4) { toast('Password troppo corta'); return; }
+
+  const { error: e1 } = await sb.from('ristoranti').update({ password: nuova }).eq('id', id);
+  if (e1) { toast('Errore ristoranti: ' + e1.message); return; }
+
+  const { data: u } = await sb.from('utenti').select('id').eq('email', email).maybeSingle();
+  if (u) {
+    await sb.from('utenti').update({ password_hash: nuova }).eq('id', u.id);
+  } else {
+    await sb.from('utenti').insert({
+      email,
+      password_hash: nuova,
+      ruolo: 'ristoratore',
+      nome: $('#reset-pass-nome').value
+    });
+  }
+
+  $('#modal-reset-pass').classList.add('hidden');
+  toast('Nuova password salvata: ' + nuova);
+});
+
 // =====================================================
 // AVVIO: se c'è ?r=...&t=... apri come cliente (QR)
 // =====================================================
 (async function initFromQR() {
   const params = new URLSearchParams(window.location.search);
   const rId = params.get('r');
-  const t = parseInt(params.get('t'));
-  if (rId && t) {
-    const r = await loadRistoranteFull(rId);
-    if (r) {
-      currentUser = { role: 'cliente', ristoranteId: rId, tavolo: t };
-      currentRistorante = r;
-      cart = [];
-      lastOrdineId = null;
-      $('#login-screen').classList.add('hidden');
-      $('#app-cliente').classList.remove('hidden');
-      $('#cliente-rist-nome').textContent = r.nome;
-      $('#cliente-tavolo-num').textContent = t;
-      showClienteView('menu');
-      renderClienteMenu();
+  const t = parseInt(params.get('t'), 10);
+  if (!rId || !t) return;
+
+  // Nascondi subito il login (anche se il DB è lento)
+  document.documentElement.classList.add('qr-entry');
+  const login = $('#login-screen');
+  const appC = $('#app-cliente');
+  if (login) login.classList.add('hidden');
+  if (appC) appC.classList.remove('hidden');
+
+  try {
+    let r = null;
+    if (sb) r = await loadRistoranteFull(rId);
+    if (!r) {
+      toast('Ristorante non trovato o database non collegato');
+      return;
     }
+    currentUser = { role: 'cliente', ristoranteId: rId, tavolo: t };
+    currentRistorante = r;
+    cart = [];
+    lastOrdineId = null;
+    if ($('#cliente-rist-nome')) $('#cliente-rist-nome').textContent = r.nome;
+    if ($('#cliente-tavolo-num')) $('#cliente-tavolo-num').textContent = t;
+    showClienteView('menu');
+    renderClienteMenu();
+  } catch (e) {
+    console.error('QR init error:', e);
+    toast('Errore apertura menu da QR');
   }
 })();
