@@ -1037,3 +1037,51 @@ td { border-top: 1px solid var(--border); font-size: 13px; }
 @media (max-width: 900px) {
   .charts-row { grid-template-columns: 1fr; }
 }
+
+/* QR entry: nasconde login prima del render JS */
+html.qr-entry #login-screen { display: none !important; }
+html.qr-entry #app-cliente { display: flex !important; }
+
+/* QR modal centrato */
+.qr-modal-body {
+  padding: 28px 24px 32px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+.qrcode-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: #fff;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+}
+.qrcode-container img,
+.qrcode-container canvas {
+  display: block;
+  margin: 0 auto;
+}
+.qr-info-text {
+  margin-top: 16px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+/* Tavoli QR mini centrati */
+.tavolo-card .qr-mini {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin: 10px auto 12px;
+  min-height: 110px;
+}
+.tavolo-card .qr-mini img,
+.tavolo-card .qr-mini canvas {
+  display: block;
+  margin: 0 auto;
+}
