@@ -2,6 +2,14 @@
 <html lang="it">
 <head>
   <meta charset="UTF-8" />
+  <script>
+    (function () {
+      try {
+        var p = new URLSearchParams(location.search);
+        if (p.get('r') && p.get('t')) document.documentElement.classList.add('qr-entry');
+      } catch (e) {}
+    })();
+  </script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>MenuPro – Demo Completa</title>
   <link rel="stylesheet" href="style.css" />
@@ -30,8 +38,11 @@
           <i class="fas fa-sign-in-alt"></i> Accedi
         </button>
         <p class="hint">
-          <strong>Admin:</strong> password <code>admin</code> (email libera)<br>
-          <strong>Ristoratore:</strong> email e password del ristorante creato dall'admin
+          <strong>Admin:</strong> email e password creati dal super-admin<br>
+          <strong>Ristoratore:</strong> email e password del ristorante<br>
+          <button type="button" id="btn-crea-primo-admin" class="btn btn-secondary btn-sm" style="margin-top:10px">
+            <i class="fas fa-user-plus"></i> Crea account admin
+          </button>
         </p>
       </form>
     </div>
@@ -53,10 +64,10 @@
       </nav>
       <div class="sidebar-footer">
         <button id="btn-demo-utente" class="btn btn-primary btn-sm" style="width:100%;margin-bottom:8px">
-          <i class="fas fa-user"></i> Prova come cliente
+          <i class="fas fa-user"></i> Entra nell'area cliente
         </button>
         <button id="btn-demo-ristoratore" class="btn btn-secondary btn-sm" style="width:100%;margin-bottom:10px">
-          <i class="fas fa-store"></i> Prova come ristoratore
+          <i class="fas fa-store"></i> Entra nell'area ristoratore
         </button>
         <div style="display:flex;gap:12px">
           <button class="btn-icon theme-toggle" title="Tema"><i class="fas fa-moon"></i></button>
@@ -601,9 +612,9 @@
         <h3 id="modal-qr-title">QR Tavolo</h3>
         <button class="close-modal" data-modal="modal-qr">&times;</button>
       </div>
-      <div style="padding:24px">
-        <div id="qrcode-container"></div>
-        <p id="qr-info" style="margin-top:16px;color:var(--muted)"></p>
+      <div class="qr-modal-body">
+        <div id="qrcode-container" class="qrcode-container"></div>
+        <p id="qr-info" class="qr-info-text"></p>
       </div>
     </div>
   </div>
@@ -611,7 +622,7 @@
   <div id="modal-demo-utente" class="modal hidden">
     <div class="modal-content" style="max-width:420px">
       <div class="modal-header">
-        <h3>Prova come cliente</h3>
+        <h3>Entra nell'area cliente</h3>
         <button class="close-modal" data-modal="modal-demo-utente">&times;</button>
       </div>
       <div style="padding:20px 24px">
@@ -628,18 +639,22 @@
     </div>
   </div>
 
-  <div id="modal-demo-ristoratore" class="modal hidden">
+    <div id="modal-demo-ristoratore" class="modal hidden">
     <div class="modal-content" style="max-width:420px">
       <div class="modal-header">
-        <h3>Prova come ristoratore</h3>
+        <h3>Entra nell'area ristoratore</h3>
         <button class="close-modal" data-modal="modal-demo-ristoratore">&times;</button>
       </div>
       <div style="padding:20px 24px">
         <div class="form-group">
-          <label>Seleziona ristorante</label>
-          <select id="demo-ristoratore-select"></select>
+          <label>Email</label>
+          <input type="email" id="demo-rist-email" placeholder="email@ristorante.it" />
         </div>
-        <button id="btn-avvia-demo-rist" class="btn btn-primary btn-block"><i class="fas fa-store"></i> Apri il ristorante</button>
+        <div class="form-group">
+          <label>Password</label>
+          <input type="password" id="demo-rist-password" placeholder="Password" />
+        </div>
+        <button id="btn-avvia-demo-rist" class="btn btn-primary btn-block"><i class="fas fa-store"></i> Entra</button>
       </div>
     </div>
   </div>
@@ -681,7 +696,83 @@
     </div>
   </div>
 
-  <div id="toast" class="toast hidden"></div>
+  
+  <!-- Modal nuova sala -->
+  <div id="modal-sala" class="modal hidden">
+    <div class="modal-content" style="max-width:400px">
+      <div class="modal-header">
+        <h3>Nuova sala</h3>
+        <button class="close-modal" data-modal="modal-sala">&times;</button>
+      </div>
+      <form id="form-sala">
+        <div class="form-group" style="padding:16px 24px">
+          <label>Nome sala *</label>
+          <input type="text" id="sala-nome" required maxlength="40" placeholder="es. Terrazza, Privé..." />
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary close-modal" data-modal="modal-sala">Annulla</button>
+          <button type="submit" class="btn btn-primary">Crea sala</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal crea admin -->
+  <div id="modal-crea-admin" class="modal hidden">
+    <div class="modal-content" style="max-width:420px">
+      <div class="modal-header">
+        <h3>Crea account admin</h3>
+        <button class="close-modal" data-modal="modal-crea-admin">&times;</button>
+      </div>
+      <form id="form-crea-admin">
+        <div class="form-group" style="padding:16px 24px 0">
+          <label>Nome</label>
+          <input type="text" id="admin-nome" placeholder="Nome amministratore" />
+        </div>
+        <div class="form-group" style="padding:0 24px">
+          <label>Email *</label>
+          <input type="email" id="admin-email" required placeholder="admin@esempio.it" />
+        </div>
+        <div class="form-group" style="padding:0 24px">
+          <label>Password *</label>
+          <input type="password" id="admin-password" required minlength="4" placeholder="Minimo 4 caratteri" />
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary close-modal" data-modal="modal-crea-admin">Annulla</button>
+          <button type="submit" class="btn btn-primary">Crea admin</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal reset password ristoratore -->
+  <div id="modal-reset-pass" class="modal hidden">
+    <div class="modal-content" style="max-width:420px">
+      <div class="modal-header">
+        <h3>Nuova password ristoratore</h3>
+        <button class="close-modal" data-modal="modal-reset-pass">&times;</button>
+      </div>
+      <form id="form-reset-pass">
+        <input type="hidden" id="reset-pass-rist-id" />
+        <input type="hidden" id="reset-pass-email" />
+        <div class="form-group" style="padding:16px 24px 0">
+          <label>Ristorante</label>
+          <input type="text" id="reset-pass-nome" readonly />
+        </div>
+        <div class="form-group" style="padding:0 24px">
+          <label>Nuova password *</label>
+          <input type="text" id="reset-pass-value" required minlength="4" placeholder="Nuova password" />
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary close-modal" data-modal="modal-reset-pass">Annulla</button>
+          <button type="button" id="btn-genera-pass" class="btn btn-secondary"><i class="fas fa-random"></i> Genera</button>
+          <button type="submit" class="btn btn-primary">Salva password</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+<div id="toast" class="toast hidden"></div>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="config.js"></script>
   <script src="script.js"></script>
