@@ -1,9 +1,10 @@
 // =====================================================
-// MenuPro – Demo Completa (riscritta)
+// MenuPro – Versione collegata a Supabase
 // =====================================================
 
-const STORAGE_KEY = 'menupro_v2';
-let ristoranti = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+const cfg = window.MENUPRO_CONFIG || {};
+const supabase = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
+
 let currentUser = null;
 let currentRistorante = null;
 let cart = [];
@@ -26,53 +27,89 @@ const PIANI = {
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => document.querySelectorAll(s);
 
-function save() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(ristoranti));
-}
 function toast(msg) {
   const t = $('#toast');
+  if (!t) return;
   t.textContent = msg;
   t.classList.remove('hidden');
   setTimeout(() => t.classList.add('hidden'), 2800);
 }
+
 function uid() {
   return crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2);
 }
+
 function formatPrice(n) {
   return '€' + Number(n).toFixed(2).replace('.', ',');
 }
+
 function formatTime(iso) {
   return new Date(iso).toLocaleString('it-IT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
-function getRistorante(id) {
-  return ristoranti.find(r => r.id === id);
-}
-function ensure(r) {
-  if (!r.menu) r.menu = [];
-  if (!r.ordini) r.ordini = [];
-  if (!r.categorie) r.categorie = ['Antipasti', 'Primi', 'Secondi', 'Dolci', 'Bevande'];
-  if (!r.sale) r.sale = ['Sala principale'];
-  if (!r.tavoli) r.tavoli = [];
-  if (!r.pagamenti) r.pagamenti = [];
+
+// =====================================================
+// SUPABASE HELPERS
+// =====================================================
+
+async function loadRistoranti() {
+  const { data, error } = await supabase.from('ristoranti').select('*').order('creato', { ascending: false });
+  if (error) { console.error(error); toast('Errore caricamento ristoranti'); return []; }
+  return data || [];
 }
 
-// ---------- LOGIN (unico form) ----------
-function doLogin(email, pass) {
+async function loadRistoranteFull(id) {
+  const { data: r, error } = await supabase.from('ristoranti').select('*').eq('id', id).single();
+  if (error || !r) return null;
+
+  const [tavoli, piatti, categorie, ordini, pagamenti] = await Promise.all([
+    supabase.from('tavoli').select('*').eq('id_ristorante', id).order('numero'),
+    supabase.from('piatti').select('*').eq('id_ristorante', id).order('nome'),
+    supabase.from('categorie').select('*').eq('id_ristorante', id).order('posizione'),
+    supabase.from('ordini').select('*').eq('id_ristorante', id).order('created_at', { ascending: false }),
+    supabase.from('pagamenti_abbonamento').select('*').eq('id_ristorante', id).order('data', { ascending: false })
+  ]);
+
+  r.tavoli = tavoli.data || [];
+  r.menu = (piatti.data || []).map(p => ({
+    ...p,
+    allergeni: p.allergeni || []
+  }));
+  r.categorie = (categorie.data || []).map(c => c.nome);
+  if (!r.categorie.length) r.categorie = ['Antipasti', 'Primi', 'Secondi', 'Dolci', 'Bevande'];
+  r.ordini = (ordini.data || []).map(o => ({
+    ...o,
+    items: o.items || [],
+    createdAt: o.created_at
+  }));
+  r.pagamenti = pagamenti.data || [];
+  r.sale = r.sale || ['Sala principale'];
+  return r;
+}
+
+async function getRistorante(id) {
+  return loadRistoranteFull(id);
+}
+
+// =====================================================
+// LOGIN
+// =====================================================
+
+async function doLogin(email, pass) {
   email = (email || '').trim().toLowerCase();
   pass = (pass || '').trim();
 
-  // Admin: password "admin" (case-insensitive)
+  // Admin
   if (pass.toLowerCase() === 'admin') {
     if (!email) email = 'admin@menupro.it';
     currentUser = { role: 'admin', email };
     $('#login-screen').classList.add('hidden');
     $('#app-admin').classList.remove('hidden');
     $('#admin-user-email').textContent = email;
-    renderAdminDashboard();
-    renderAdminTable();
-    renderAbbonamenti();
-    renderMieiIncassi();
-    populateIncassiSelect();
+    await renderAdminDashboard();
+    await renderAdminTable();
+    await renderAbbonamenti();
+    await renderMieiIncassi();
+    await populateIncassiSelect();
     return true;
   }
 
@@ -82,40 +119,41 @@ function doLogin(email, pass) {
   }
 
   // Ristoratore
-  const r = ristoranti.find(x => x.email === email && x.password === pass);
+  const { data: r, error } = await supabase
+    .from('ristoranti')
+    .select('*')
+    .eq('email', email)
+    .eq('password', pass)
+    .maybeSingle();
+
+  if (error) { console.error(error); toast('Errore di connessione'); return false; }
+
   if (r) {
-    ensure(r);
+    currentRistorante = await loadRistoranteFull(r.id);
     currentUser = { role: 'ristoratore', email, ristoranteId: r.id };
-    currentRistorante = r;
     $('#login-screen').classList.add('hidden');
     $('#app-ristoratore').classList.remove('hidden');
     $('#rist-nome-sidebar').textContent = r.nome;
     $('#rist-user-email').textContent = email;
-    renderRistDashboard();
-    renderMenuTable();
-    renderOrdiniKanban();
-    renderTavoli();
+    await renderRistDashboard();
+    await renderMenuTable();
+    await renderOrdiniKanban();
+    await renderTavoli();
     return true;
   }
 
-  // Messaggi più chiari
-  const emailExists = ristoranti.some(x => x.email === email);
-  if (emailExists) {
-    toast('Password errata per questo ristorante');
-  } else if (ristoranti.length === 0) {
-    toast('Nessun ristorante creato. Entra come admin (password: admin)');
-  } else {
-    toast('Credenziali non valide. Admin: password admin');
-  }
+  toast('Credenziali non valide. Admin: password admin');
   return false;
 }
 
-$('#login-form').addEventListener('submit', (e) => {
+$('#login-form').addEventListener('submit', async (e) => {
   e.preventDefault();
-  doLogin($('#login-email').value, $('#login-password').value);
+  await doLogin($('#login-email').value, $('#login-password').value);
 });
 
-// ---------- LOGOUT ----------
+// =====================================================
+// LOGOUT
+// =====================================================
 $$('.logout-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     currentUser = null;
@@ -130,7 +168,9 @@ $$('.logout-btn').forEach(btn => {
   });
 });
 
-// ---------- THEME ----------
+// =====================================================
+// THEME
+// =====================================================
 $$('.theme-toggle').forEach(btn => {
   btn.addEventListener('click', () => {
     const html = document.documentElement;
@@ -140,9 +180,11 @@ $$('.theme-toggle').forEach(btn => {
   });
 });
 
-// ---------- NAV ADMIN ----------
+// =====================================================
+// NAV ADMIN
+// =====================================================
 $$('#app-admin .nav-item').forEach(item => {
-  item.addEventListener('click', (e) => {
+  item.addEventListener('click', async (e) => {
     e.preventDefault();
     $$('#app-admin .nav-item').forEach(n => n.classList.remove('active'));
     item.classList.add('active');
@@ -154,15 +196,19 @@ $$('#app-admin .nav-item').forEach(item => {
       'miei-incassi': 'I miei incassi', 'incassi-rist': 'Incassi ristoranti', impostazioni: 'Impostazioni'
     };
     $('#admin-page-title').textContent = titles[page] || page;
-    if (page === 'abbonamenti') renderAbbonamenti();
-    if (page === 'miei-incassi') renderMieiIncassi();
-    if (page === 'incassi-rist') populateIncassiSelect();
+    if (page === 'dashboard') await renderAdminDashboard();
+    if (page === 'ristoranti') await renderAdminTable();
+    if (page === 'abbonamenti') await renderAbbonamenti();
+    if (page === 'miei-incassi') await renderMieiIncassi();
+    if (page === 'incassi-rist') await populateIncassiSelect();
   });
 });
 
-// ---------- NAV RIST ----------
+// =====================================================
+// NAV RISTORATORE
+// =====================================================
 $$('#app-ristoratore .nav-item').forEach(item => {
-  item.addEventListener('click', (e) => {
+  item.addEventListener('click', async (e) => {
     e.preventDefault();
     $$('#app-ristoratore .nav-item').forEach(n => n.classList.remove('active'));
     item.classList.add('active');
@@ -174,14 +220,16 @@ $$('#app-ristoratore .nav-item').forEach(item => {
       'rist-ordini': 'Ordini', 'rist-tavoli': 'Tavoli & QR'
     };
     $('#rist-page-title').textContent = titles[page] || page;
-    if (page === 'rist-dashboard') renderRistDashboard();
-    if (page === 'rist-menu') renderMenuTable();
-    if (page === 'rist-ordini') renderOrdiniKanban();
-    if (page === 'rist-tavoli') renderTavoli();
+    if (page === 'rist-dashboard') await renderRistDashboard();
+    if (page === 'rist-menu') await renderMenuTable();
+    if (page === 'rist-ordini') await renderOrdiniKanban();
+    if (page === 'rist-tavoli') await renderTavoli();
   });
 });
 
-// ---------- CLOSE MODALS ----------
+// =====================================================
+// CLOSE MODALS
+// =====================================================
 $$('.close-modal').forEach(btn => {
   btn.addEventListener('click', () => {
     const id = btn.dataset.modal;
@@ -189,8 +237,10 @@ $$('.close-modal').forEach(btn => {
   });
 });
 
-// ---------- TOGGLE PASSWORD ----------
-$('#toggle-pass').addEventListener('click', () => {
+// =====================================================
+// TOGGLE PASSWORD
+// =====================================================
+$('#toggle-pass')?.addEventListener('click', () => {
   const inp = $('#password');
   const icon = $('#toggle-pass i');
   if (inp.type === 'password') {
@@ -202,9 +252,11 @@ $('#toggle-pass').addEventListener('click', () => {
   }
 });
 
-// ========== ADMIN ==========
-
-function renderAdminDashboard() {
+// =====================================================
+// ADMIN – DASHBOARD
+// =====================================================
+async function renderAdminDashboard() {
+  const ristoranti = await loadRistoranti();
   const attivi = ristoranti.filter(r => !r.scadenza || new Date(r.scadenza) >= new Date()).length;
   let ricavi = 0;
   ristoranti.forEach(r => {
@@ -215,7 +267,7 @@ function renderAdminDashboard() {
   $('#stat-attivi').textContent = attivi;
   $('#stat-ricavi').textContent = formatPrice(ricavi);
 
-  const recent = [...ristoranti].reverse().slice(0, 5);
+  const recent = ristoranti.slice(0, 5);
   const list = $('#recent-list');
   if (!recent.length) {
     list.innerHTML = '<p style="color:var(--muted)">Nessun ristorante ancora creato.</p>';
@@ -227,10 +279,10 @@ function renderAdminDashboard() {
       </div>
     `).join('');
   }
-  renderAdminCharts();
+  renderAdminCharts(ristoranti);
 }
 
-function renderAdminCharts() {
+function renderAdminCharts(ristoranti) {
   if (typeof Chart === 'undefined') return;
   const mesi = [], vals = [];
   const now = new Date();
@@ -238,13 +290,8 @@ function renderAdminCharts() {
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
     mesi.push(d.toLocaleDateString('it-IT', { month: 'short' }));
     let v = 0;
-    ristoranti.forEach(r => {
-      (r.pagamenti || []).forEach(p => {
-        const pd = new Date(p.data);
-        if (pd.getMonth() === d.getMonth() && pd.getFullYear() === d.getFullYear()) v += p.importo || 0;
-      });
-    });
-    if (v === 0 && i === 0) {
+    // semplificato: mostra solo ricavi del mese corrente se non ci sono pagamenti
+    if (i === 0) {
       ristoranti.forEach(r => {
         const plan = PIANI[r.id_piano];
         if (plan && (!r.scadenza || new Date(r.scadenza) >= new Date())) v += plan.prezzo;
@@ -274,8 +321,11 @@ function renderAdminCharts() {
   }
 }
 
-function renderAdminTable(filter = '') {
-  let data = ristoranti;
+// =====================================================
+// ADMIN – TABELLA RISTORANTI
+// =====================================================
+async function renderAdminTable(filter = '') {
+  let data = await loadRistoranti();
   if (filter) {
     const q = filter.toLowerCase();
     data = data.filter(r =>
@@ -306,10 +356,10 @@ function renderAdminTable(filter = '') {
   `).join('');
 }
 
-$('#search-ristoranti').addEventListener('input', e => renderAdminTable(e.target.value));
+$('#search-ristoranti')?.addEventListener('input', e => renderAdminTable(e.target.value));
 
 // Nuovo / Modifica ristorante
-$('#btn-nuovo').addEventListener('click', () => {
+$('#btn-nuovo')?.addEventListener('click', () => {
   $('#modal-title').textContent = 'Nuovo ristorante';
   $('#form-ristorante').reset();
   $('#edit-id').value = '';
@@ -324,12 +374,12 @@ $('#btn-nuovo').addEventListener('click', () => {
   $('#modal-ristorante').classList.remove('hidden');
 });
 
-function createDefaultTavoli(n) {
-  const tavoli = [];
+async function createDefaultTavoli(ristoranteId, n) {
   const count = Math.max(1, parseInt(n) || 8);
+  const rows = [];
   for (let i = 1; i <= count; i++) {
-    tavoli.push({
-      id: uid(),
+    rows.push({
+      id_ristorante: ristoranteId,
       numero: i,
       adulti: 4,
       bambini: 0,
@@ -338,10 +388,35 @@ function createDefaultTavoli(n) {
       forma: 'round'
     });
   }
-  return tavoli;
+  if (rows.length) await supabase.from('tavoli').insert(rows);
 }
 
-$('#form-ristorante').addEventListener('submit', (e) => {
+async function createDefaultCategorie(ristoranteId) {
+  const cats = ['Antipasti', 'Primi', 'Secondi', 'Dolci', 'Bevande'];
+  await supabase.from('categorie').insert(cats.map((nome, i) => ({
+    id_ristorante: ristoranteId,
+    nome,
+    posizione: i
+  })));
+}
+
+async function createDefaultMenu(ristoranteId) {
+  const piatti = [
+    { nome: 'Bruschetta al pomodoro', descrizione: 'Pane tostato, pomodoro fresco, basilico', prezzo: 5.50, categoria: 'Antipasti', allergeni: ['glutine'] },
+    { nome: 'Spaghetti carbonara', descrizione: 'Guanciale, pecorino, uovo', prezzo: 12.00, categoria: 'Primi', allergeni: ['glutine', 'uova', 'latticini'] },
+    { nome: 'Bistecca alla fiorentina', descrizione: 'Manzo, rosmarino, olio EVO', prezzo: 28.00, categoria: 'Secondi', allergeni: [] },
+    { nome: 'Tiramisù', descrizione: 'Mascarpone, caffè, cacao', prezzo: 6.50, categoria: 'Dolci', allergeni: ['latticini', 'uova', 'glutine'] },
+    { nome: 'Acqua naturale 75cl', descrizione: '', prezzo: 2.50, categoria: 'Bevande', allergeni: [] },
+    { nome: 'Vino della casa (calice)', descrizione: '', prezzo: 4.00, categoria: 'Bevande', allergeni: [] }
+  ];
+  await supabase.from('piatti').insert(piatti.map(p => ({
+    ...p,
+    id_ristorante: ristoranteId,
+    disponibile: true
+  })));
+}
+
+$('#form-ristorante')?.addEventListener('submit', async (e) => {
   e.preventDefault();
   const id = $('#edit-id').value;
   const saleStr = $('#sale').value.trim() || 'Sala principale';
@@ -349,7 +424,6 @@ $('#form-ristorante').addEventListener('submit', (e) => {
   const nTavoli = parseInt($('#n_tavoli').value) || 8;
 
   const data = {
-    id: id || uid(),
     nome: $('#nome').value.trim(),
     titolare: $('#titolare').value.trim(),
     citta: $('#citta').value.trim(),
@@ -357,48 +431,33 @@ $('#form-ristorante').addEventListener('submit', (e) => {
     password: $('#password').value,
     id_piano: $('#id_piano').value,
     scadenza: $('#scadenza').value || null,
-    sale,
-    creato: new Date().toISOString()
+    sale
   };
 
   if (id) {
-    const idx = ristoranti.findIndex(r => r.id === id);
-    if (idx > -1) {
-      const old = ristoranti[idx];
-      if (!data.password) data.password = old.password;
-      data.menu = old.menu || [];
-      data.ordini = old.ordini || [];
-      data.categorie = old.categorie || ['Antipasti', 'Primi', 'Secondi', 'Dolci', 'Bevande'];
-      data.tavoli = old.tavoli && old.tavoli.length ? old.tavoli : createDefaultTavoli(nTavoli);
-      data.pagamenti = old.pagamenti || [];
-      ristoranti[idx] = data;
-      toast('Ristorante aggiornato');
-    }
+    // update
+    if (!data.password) delete data.password;
+    const { error } = await supabase.from('ristoranti').update(data).eq('id', id);
+    if (error) { toast('Errore aggiornamento'); console.error(error); return; }
+    toast('Ristorante aggiornato');
   } else {
-    data.menu = [
-      { id: uid(), nome: 'Bruschetta al pomodoro', descrizione: 'Pane tostato, pomodoro fresco, basilico', prezzo: 5.50, categoria: 'Antipasti', disponibile: true, allergeni: ['glutine'], immagine: '' },
-      { id: uid(), nome: 'Spaghetti carbonara', descrizione: 'Guanciale, pecorino, uovo', prezzo: 12.00, categoria: 'Primi', disponibile: true, allergeni: ['glutine', 'uova', 'latticini'], immagine: '' },
-      { id: uid(), nome: 'Bistecca alla fiorentina', descrizione: 'Manzo, rosmarino, olio EVO', prezzo: 28.00, categoria: 'Secondi', disponibile: true, allergeni: [], immagine: '' },
-      { id: uid(), nome: 'Tiramisù', descrizione: 'Mascarpone, caffè, cacao', prezzo: 6.50, categoria: 'Dolci', disponibile: true, allergeni: ['latticini', 'uova', 'glutine'], immagine: '' },
-      { id: uid(), nome: 'Acqua naturale 75cl', descrizione: '', prezzo: 2.50, categoria: 'Bevande', disponibile: true, allergeni: [], immagine: '' },
-      { id: uid(), nome: 'Vino della casa (calice)', descrizione: '', prezzo: 4.00, categoria: 'Bevande', disponibile: true, allergeni: [], immagine: '' }
-    ];
-    data.ordini = [];
-    data.categorie = ['Antipasti', 'Primi', 'Secondi', 'Dolci', 'Bevande'];
-    data.tavoli = createDefaultTavoli(nTavoli);
-    data.pagamenti = [];
-    ristoranti.push(data);
+    // insert
+    const { data: inserted, error } = await supabase.from('ristoranti').insert(data).select().single();
+    if (error) { toast('Errore creazione: ' + error.message); console.error(error); return; }
+    await createDefaultTavoli(inserted.id, nTavoli);
+    await createDefaultCategorie(inserted.id);
+    await createDefaultMenu(inserted.id);
     toast('Ristorante creato con menu di esempio');
   }
-  save();
+
   $('#modal-ristorante').classList.add('hidden');
-  renderAdminTable($('#search-ristoranti').value);
-  renderAdminDashboard();
-  renderAbbonamenti();
+  await renderAdminTable($('#search-ristoranti')?.value || '');
+  await renderAdminDashboard();
+  await renderAbbonamenti();
 });
 
-window.editRistorante = function(id) {
-  const r = getRistorante(id);
+window.editRistorante = async function(id) {
+  const { data: r } = await supabase.from('ristoranti').select('*').eq('id', id).single();
   if (!r) return;
   $('#modal-title').textContent = 'Modifica ristorante';
   $('#edit-id').value = r.id;
@@ -406,50 +465,51 @@ window.editRistorante = function(id) {
   $('#titolare').value = r.titolare || '';
   $('#citta').value = r.citta || '';
   $('#email').value = r.email;
-  $('#password').value = r.password || '';
+  $('#password').value = '';
   $('#password').type = 'password';
   $('#password').required = false;
   $('#toggle-pass i').className = 'fas fa-eye';
   $('#id_piano').value = r.id_piano;
   $('#scadenza').value = r.scadenza || '';
   $('#sale').value = (r.sale || []).join(', ');
-  $('#n_tavoli').value = (r.tavoli || []).length || 8;
+  const { count } = await supabase.from('tavoli').select('*', { count: 'exact', head: true }).eq('id_ristorante', id);
+  $('#n_tavoli').value = count || 8;
   $('#modal-ristorante').classList.remove('hidden');
 };
 
-window.deleteRistorante = function(id) {
+window.deleteRistorante = async function(id) {
   if (!confirm('Eliminare questo ristorante?')) return;
-  ristoranti = ristoranti.filter(r => r.id !== id);
-  save();
-  renderAdminTable($('#search-ristoranti').value);
-  renderAdminDashboard();
-  renderAbbonamenti();
+  const { error } = await supabase.from('ristoranti').delete().eq('id', id);
+  if (error) { toast('Errore eliminazione'); return; }
+  await renderAdminTable($('#search-ristoranti')?.value || '');
+  await renderAdminDashboard();
+  await renderAbbonamenti();
   toast('Ristorante eliminato');
 };
 
-// Admin apre menu di un ristorante (entra come ristoratore temporaneo)
-window.adminApriMenu = function(id) {
-  const r = getRistorante(id);
+window.adminApriMenu = async function(id) {
+  const r = await loadRistoranteFull(id);
   if (!r) return;
-  ensure(r);
   currentRistorante = r;
   currentUser = { role: 'ristoratore', email: r.email, ristoranteId: r.id, fromAdmin: true };
   $('#app-admin').classList.add('hidden');
   $('#app-ristoratore').classList.remove('hidden');
   $('#rist-nome-sidebar').textContent = r.nome + ' (admin)';
   $('#rist-user-email').textContent = 'Gestione menu';
-  // forza pagina menu
   $$('#app-ristoratore .nav-item').forEach(n => n.classList.remove('active'));
   $$('#app-ristoratore .page').forEach(p => p.classList.add('hidden'));
   const menuNav = $$('#app-ristoratore .nav-item')[1];
   if (menuNav) menuNav.classList.add('active');
   $('#page-rist-menu').classList.remove('hidden');
   $('#rist-page-title').textContent = 'Gestione Menu';
-  renderMenuTable();
+  await renderMenuTable();
 };
 
+// =====================================================
 // ABBONAMENTI
-function renderAbbonamenti() {
+// =====================================================
+async function renderAbbonamenti() {
+  const ristoranti = await loadRistoranti();
   const body = $('#abbonamenti-body');
   if (!ristoranti.length) {
     body.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:30px">Nessun abbonamento</td></tr>`;
@@ -467,13 +527,11 @@ function renderAbbonamenti() {
       scadText = scad.toLocaleDateString('it-IT', { day: '2-digit', month: 'long', year: 'numeric' });
       if (scad < oggi) {
         statoLabel = 'Scaduto';
-        statoClass = 'badge-base';
         scadClass = 'scadenza-late';
       } else {
         const diff = Math.ceil((scad - oggi) / (1000*60*60*24));
         if (diff <= 7) {
           statoLabel = 'In scadenza';
-          statoClass = 'badge-base';
           scadClass = 'scadenza-warn';
         } else {
           statoLabel = 'Attivo';
@@ -498,59 +556,55 @@ function renderAbbonamenti() {
   }).join('');
 }
 
-window.estendiAbbonamento = function(id) {
-  const r = getRistorante(id);
+window.estendiAbbonamento = async function(id) {
+  const { data: r } = await supabase.from('ristoranti').select('*').eq('id', id).single();
   if (!r) return;
   let d = r.scadenza ? new Date(r.scadenza) : new Date();
   if (d < new Date()) d = new Date();
   d.setMonth(d.getMonth() + 1);
-  r.scadenza = d.toISOString().slice(0, 10);
-  // registra pagamento
-  if (!r.pagamenti) r.pagamenti = [];
+  const nuovaScad = d.toISOString().slice(0, 10);
+  await supabase.from('ristoranti').update({ scadenza: nuovaScad }).eq('id', id);
   const prezzo = PIANI[r.id_piano]?.prezzo || 0;
-  r.pagamenti.push({
-    id: uid(),
+  await supabase.from('pagamenti_abbonamento').insert({
+    id_ristorante: id,
     importo: prezzo,
     piano: r.id_piano,
-    data: new Date().toISOString(),
     tipo: 'rinnovo'
   });
-  save();
-  renderAbbonamenti();
-  renderAdminDashboard();
-  renderMieiIncassi();
-  const nuovaScad = new Date(r.scadenza).toLocaleDateString('it-IT', { day: '2-digit', month: 'long', year: 'numeric' });
-  toast('Rinnovato fino al ' + nuovaScad + ' (+' + formatPrice(prezzo) + ')');
+  await renderAbbonamenti();
+  await renderAdminDashboard();
+  await renderMieiIncassi();
+  toast('Rinnovato fino al ' + new Date(nuovaScad).toLocaleDateString('it-IT', { day: '2-digit', month: 'long', year: 'numeric' }) + ' (+' + formatPrice(prezzo) + ')');
 };
 
+// =====================================================
 // MIEI INCASSI
-function renderMieiIncassi() {
+// =====================================================
+async function renderMieiIncassi() {
+  const ristoranti = await loadRistoranti();
   let totale = 0, mese = 0, inAttesa = 0;
   const now = new Date();
   const pagamenti = [];
-  ristoranti.forEach(r => {
-    (r.pagamenti || []).forEach(p => {
-      totale += p.importo;
+
+  for (const r of ristoranti) {
+    const { data: pags } = await supabase.from('pagamenti_abbonamento').select('*').eq('id_ristorante', r.id);
+    (pags || []).forEach(p => {
+      totale += Number(p.importo);
       const pd = new Date(p.data);
-      if (pd.getMonth() === now.getMonth() && pd.getFullYear() === now.getFullYear()) {
-        mese += p.importo;
-      }
+      if (pd.getMonth() === now.getMonth() && pd.getFullYear() === now.getFullYear()) mese += Number(p.importo);
       pagamenti.push({ ...p, ristorante: r.nome });
     });
-    // in attesa: se scade entro 7 giorni
     if (r.scadenza) {
       const scad = new Date(r.scadenza);
       const diff = (scad - now) / (1000 * 60 * 60 * 24);
-      if (diff >= 0 && diff <= 7) {
-        inAttesa += PIANI[r.id_piano]?.prezzo || 0;
-      }
+      if (diff >= 0 && diff <= 7) inAttesa += PIANI[r.id_piano]?.prezzo || 0;
     }
-  });
+  }
+
   $('#incassi-totale').textContent = formatPrice(totale);
   $('#incassi-mese').textContent = formatPrice(mese);
   $('#incassi-in-attesa').textContent = formatPrice(inAttesa);
 
-  // prossime scadenze
   const scadenze = ristoranti
     .filter(r => r.scadenza)
     .map(r => ({ nome: r.nome, scadenza: r.scadenza, piano: r.id_piano }))
@@ -588,30 +642,31 @@ function renderMieiIncassi() {
   list.innerHTML = html;
 }
 
+// =====================================================
 // INCASSI RISTORANTI
-function populateIncassiSelect() {
+// =====================================================
+async function populateIncassiSelect() {
+  const ristoranti = await loadRistoranti();
   const sel = $('#select-rist-incassi');
   sel.innerHTML = '<option value="">— Seleziona —</option>' +
     ristoranti.map(r => `<option value="${r.id}">${r.nome}</option>`).join('');
 }
 
-$('#select-rist-incassi').addEventListener('change', () => {
+$('#select-rist-incassi')?.addEventListener('change', async () => {
   const id = $('#select-rist-incassi').value;
   const cont = $('#incassi-rist-content');
   if (!id) {
     cont.innerHTML = '<p style="color:var(--muted)">Seleziona un ristorante per vedere i dettagli.</p>';
     return;
   }
-  const r = getRistorante(id);
+  const r = await loadRistoranteFull(id);
   if (!r) return;
-  ensure(r);
 
   const ordini = r.ordini || [];
-  const totale = ordini.reduce((s, o) => s + (o.totale || 0), 0);
+  const totale = ordini.reduce((s, o) => s + (Number(o.totale) || 0), 0);
   const oggi = ordini.filter(o => new Date(o.createdAt).toDateString() === new Date().toDateString())
-    .reduce((s, o) => s + o.totale, 0);
+    .reduce((s, o) => s + Number(o.totale), 0);
 
-  // piatto più venduto
   const counts = {};
   ordini.forEach(o => {
     (o.items || []).forEach(i => {
@@ -646,7 +701,7 @@ $('#select-rist-incassi').addEventListener('change', () => {
       <h3>Ultimi ordini di ${r.nome}</h3>
       <div class="recent-list">
         ${ordini.length === 0 ? '<p style="color:var(--muted)">Nessun ordine.</p>' :
-          [...ordini].reverse().slice(0, 10).map(o => `
+          ordini.slice(0, 10).map(o => `
             <div class="recent-item">
               <span>Tavolo ${o.tavolo} · ${formatPrice(o.totale)}</span>
               <span class="badge-stato ${o.stato}">${labelStato(o.stato)}</span>
@@ -658,34 +713,35 @@ $('#select-rist-incassi').addEventListener('change', () => {
 });
 
 // RESET
-$('#btn-reset').addEventListener('click', () => {
-  if (!confirm('Cancellare TUTTI i dati demo?')) return;
-  ristoranti = [];
-  save();
-  renderAdminTable();
-  renderAdminDashboard();
-  renderAbbonamenti();
-  renderMieiIncassi();
+$('#btn-reset')?.addEventListener('click', async () => {
+  if (!confirm('Cancellare TUTTI i dati? Questa operazione non si può annullare.')) return;
+  await supabase.from('pagamenti_abbonamento').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+  await supabase.from('ordini').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+  await supabase.from('piatti').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+  await supabase.from('categorie').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+  await supabase.from('tavoli').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+  await supabase.from('ristoranti').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+  await renderAdminTable();
+  await renderAdminDashboard();
+  await renderAbbonamenti();
+  await renderMieiIncassi();
   toast('Dati cancellati');
 });
 
 // DEMO UTENTE
-$('#btn-demo-utente').addEventListener('click', () => {
+$('#btn-demo-utente')?.addEventListener('click', async () => {
+  const ristoranti = await loadRistoranti();
+  if (!ristoranti.length) { toast('Crea prima un ristorante'); return; }
   const sel = $('#demo-ristorante');
-  if (!ristoranti.length) {
-    toast('Crea prima un ristorante');
-    return;
-  }
   sel.innerHTML = ristoranti.map(r => `<option value="${r.id}">${r.nome}</option>`).join('');
   $('#modal-demo-utente').classList.remove('hidden');
 });
 
-$('#btn-avvia-demo').addEventListener('click', () => {
+$('#btn-avvia-demo')?.addEventListener('click', async () => {
   const ristId = $('#demo-ristorante').value;
   const tavolo = parseInt($('#demo-tavolo').value) || 1;
-  const r = getRistorante(ristId);
+  const r = await loadRistoranteFull(ristId);
   if (!r) return;
-  ensure(r);
   currentUser = { role: 'cliente', ristoranteId: ristId, tavolo };
   currentRistorante = r;
   cart = [];
@@ -699,8 +755,9 @@ $('#btn-avvia-demo').addEventListener('click', () => {
   renderClienteMenu();
 });
 
-// ========== RISTORATORE ==========
-
+// =====================================================
+// RISTORATORE
+// =====================================================
 function labelStato(s) {
   return { nuovo: 'Nuovo', in_preparazione: 'In preparazione', pronto: 'Pronto', consegnato: 'Consegnato', chiuso: 'Chiuso' }[s] || s;
 }
@@ -727,17 +784,17 @@ function inPeriod(iso, period) {
 }
 
 $$('.period-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
+  btn.addEventListener('click', async () => {
     $$('.period-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     currentPeriod = btn.dataset.period;
-    renderRistDashboard();
+    await renderRistDashboard();
   });
 });
 
-function renderRistDashboard() {
+async function renderRistDashboard() {
   if (!currentRistorante) return;
-  ensure(currentRistorante);
+  currentRistorante = await loadRistoranteFull(currentRistorante.id);
   const menu = currentRistorante.menu || [];
   const ordini = currentRistorante.ordini || [];
   const tavoli = currentRistorante.tavoli || [];
@@ -746,7 +803,7 @@ function renderRistDashboard() {
   const occupati = tavoli.filter(t => t.occupato).length ||
     new Set(ordini.filter(o => o.stato !== 'consegnato' && o.stato !== 'chiuso').map(o => o.tavolo)).size;
   const incasso = ordini.filter(o => inPeriod(o.createdAt, currentPeriod))
-    .reduce((s, o) => s + o.totale, 0);
+    .reduce((s, o) => s + Number(o.totale), 0);
 
   $('#rist-stat-piatti').textContent = menu.length;
   $('#rist-stat-tavoli-occ').textContent = occupati;
@@ -758,7 +815,7 @@ function renderRistDashboard() {
   if (nuovi > 0) { badge.textContent = nuovi; badge.classList.remove('hidden'); }
   else badge.classList.add('hidden');
 
-  const recent = [...ordini].reverse().slice(0, 5);
+  const recent = ordini.slice(0, 5);
   const list = $('#rist-recent-ordini');
   if (!recent.length) {
     list.innerHTML = '<p style="color:var(--muted)">Nessun ordine ancora.</p>';
@@ -780,71 +837,53 @@ function renderRistDashboard() {
 function renderRistCharts() {
   if (typeof Chart === 'undefined' || !currentRistorante) return;
   const ordini = (currentRistorante.ordini || []).filter(o => inPeriod(o.createdAt, currentPeriod));
-  const buckets = {}, labels = [];
-  if (currentPeriod === 'oggi') {
-    for (let h = 10; h <= 22; h++) { const k = h + ':00'; labels.push(k); buckets[k] = 0; }
-    ordini.forEach(o => {
-      const h = new Date(o.createdAt).getHours();
-      const k = Math.min(22, Math.max(10, h)) + ':00';
-      if (buckets[k] !== undefined) buckets[k] += o.totale;
-    });
-  } else {
-    const days = currentPeriod === 'settimana' ? 7 : 30;
-    for (let i = days - 1; i >= 0; i--) {
-      const d = new Date(); d.setDate(d.getDate() - i);
-      const k = d.toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit' });
-      labels.push(k); buckets[k] = 0;
-    }
-    ordini.forEach(o => {
-      const k = new Date(o.createdAt).toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit' });
-      if (buckets[k] !== undefined) buckets[k] += o.totale;
-    });
-  }
+  // chart semplificato
   const ctx1 = document.getElementById('chart-incassi-rist');
   if (ctx1) {
     if (chartIncassiRist) chartIncassiRist.destroy();
+    const labels = ['Incasso'];
+    const data = [ordini.reduce((s, o) => s + Number(o.totale), 0)];
     chartIncassiRist = new Chart(ctx1, {
-      type: 'line',
-      data: { labels, datasets: [{ label: 'Incasso', data: labels.map(l => buckets[l] || 0), borderColor: '#c45c26', backgroundColor: 'rgba(196,92,38,0.12)', fill: true, tension: 0.35, pointRadius: 3 }] },
-      options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { callback: v => '€' + v } }, x: { grid: { display: false } } } }
+      type: 'bar',
+      data: { labels, datasets: [{ label: '€', data, backgroundColor: 'rgba(196, 92, 38, 0.7)', borderRadius: 6 }] },
+      options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } }
     });
   }
-  const all = currentRistorante.ordini || [];
-  const stCounts = {
-    Nuovi: all.filter(o => o.stato === 'nuovo').length,
-    Prep: all.filter(o => o.stato === 'in_preparazione').length,
-    Pronti: all.filter(o => o.stato === 'pronto' || o.stato === 'consegnato').length,
-    Pagati: all.filter(o => (o.stato_pagamento || defaultPagStato(o.pagamento)) === 'pagato').length,
-    'In attesa': all.filter(o => (o.stato_pagamento || defaultPagStato(o.pagamento)) === 'in_attesa').length
-  };
+  const stati = { nuovo: 0, in_preparazione: 0, pronto: 0, consegnato: 0 };
+  ordini.forEach(o => { if (stati[o.stato] !== undefined) stati[o.stato]++; });
   const ctx2 = document.getElementById('chart-stati-rist');
   if (ctx2) {
     if (chartStatiRist) chartStatiRist.destroy();
     chartStatiRist = new Chart(ctx2, {
-      type: 'bar',
-      data: { labels: Object.keys(stCounts), datasets: [{ data: Object.values(stCounts), backgroundColor: ['#d4890f', '#3d6b8c', '#3d7a5a', '#2a5a40', '#c4a574'], borderRadius: 6 }] },
-      options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } }, x: { grid: { display: false } } } }
+      type: 'doughnut',
+      data: {
+        labels: ['Nuovo', 'In prep.', 'Pronto', 'Consegnato'],
+        datasets: [{ data: [stati.nuovo, stati.in_preparazione, stati.pronto, stati.consegnato], backgroundColor: ['#d4890f', '#3d6b8c', '#3d7a5a', '#7a6f62'], borderWidth: 0 }]
+      },
+      options: { responsive: true, plugins: { legend: { position: 'bottom', labels: { boxWidth: 12 } } } }
     });
   }
 }
 
+// =====================================================
 // MENU
-function renderMenuTable(filter = '') {
+// =====================================================
+async function renderMenuTable(filter = '') {
   if (!currentRistorante) return;
-  ensure(currentRistorante);
+  currentRistorante = await loadRistoranteFull(currentRistorante.id);
   let menu = currentRistorante.menu || [];
 
   // chips categorie
-  const cats = ['tutti', ...(currentRistorante.categorie || [])];
   const chips = $('#categorie-chips');
   if (chips) {
+    const cats = ['tutti', ...(currentRistorante.categorie || [])];
     chips.innerHTML = cats.map(c =>
       `<button class="cat-chip ${c === menuFilterCat ? 'active' : ''}" data-cat="${c}">${c === 'tutti' ? 'Tutti' : c}</button>`
     ).join('');
     chips.querySelectorAll('.cat-chip').forEach(chip => {
       chip.addEventListener('click', () => {
         menuFilterCat = chip.dataset.cat;
-        renderMenuTable($('#search-menu').value);
+        renderMenuTable(filter);
       });
     });
   }
@@ -855,7 +894,6 @@ function renderMenuTable(filter = '') {
     menu = menu.filter(p => p.nome.toLowerCase().includes(q));
   }
 
-  // select categorie nel form
   const sel = $('#piatto-categoria');
   if (sel) {
     sel.innerHTML = (currentRistorante.categorie || []).map(c =>
@@ -891,7 +929,7 @@ function renderMenuTable(filter = '') {
   `).join('');
 }
 
-$('#search-menu').addEventListener('input', e => renderMenuTable(e.target.value));
+$('#search-menu')?.addEventListener('input', e => renderMenuTable(e.target.value));
 
 function resetPiattoImage() {
   const prev = $('#piatto-preview');
@@ -939,7 +977,7 @@ $('#piatto-immagine')?.addEventListener('input', (e) => {
 
 $('#btn-rimuovi-img')?.addEventListener('click', () => resetPiattoImage());
 
-$('#btn-nuovo-piatto').addEventListener('click', () => {
+$('#btn-nuovo-piatto')?.addEventListener('click', () => {
   $('#modal-piatto-title').textContent = 'Nuovo piatto';
   $('#form-piatto').reset();
   $('#piatto-edit-id').value = '';
@@ -951,40 +989,39 @@ $('#btn-nuovo-piatto').addEventListener('click', () => {
   $('#modal-piatto').classList.remove('hidden');
 });
 
-$('#btn-nuova-categoria').addEventListener('click', () => {
+$('#btn-nuova-categoria')?.addEventListener('click', () => {
   $('#form-categoria').reset();
   $('#modal-categoria').classList.remove('hidden');
 });
 
-$('#form-categoria').addEventListener('submit', (e) => {
+$('#form-categoria')?.addEventListener('submit', async (e) => {
   e.preventDefault();
   const nome = $('#cat-nome').value.trim();
   if (!nome || !currentRistorante) return;
-  ensure(currentRistorante);
-  if (!currentRistorante.categorie.includes(nome)) {
-    currentRistorante.categorie.push(nome);
-    syncRist();
+  if (!(currentRistorante.categorie || []).includes(nome)) {
+    await supabase.from('categorie').insert({
+      id_ristorante: currentRistorante.id,
+      nome,
+      posizione: (currentRistorante.categorie || []).length
+    });
     toast('Categoria creata');
   }
   $('#modal-categoria').classList.add('hidden');
-  renderMenuTable();
+  await renderMenuTable();
 });
 
-$('#form-piatto').addEventListener('submit', (e) => {
+$('#form-piatto')?.addEventListener('submit', async (e) => {
   e.preventDefault();
   if (!currentRistorante) return;
-  ensure(currentRistorante);
   const id = $('#piatto-edit-id').value;
   const allergeni = [...$$('#allergeni-grid input:checked')].map(c => c.value);
   let immagine = ($('#piatto-immagine')?.value || '').trim();
   const previewSrc = $('#piatto-preview')?.src || '';
-  if (!immagine && previewSrc && previewSrc.startsWith('data:')) {
-    immagine = previewSrc;
-  } else if (!immagine && previewSrc && !$('#piatto-preview-wrap')?.classList.contains('hidden')) {
-    immagine = previewSrc;
-  }
+  if (!immagine && previewSrc && previewSrc.startsWith('data:')) immagine = previewSrc;
+  else if (!immagine && previewSrc && !$('#piatto-preview-wrap')?.classList.contains('hidden')) immagine = previewSrc;
+
   const data = {
-    id: id || uid(),
+    id_ristorante: currentRistorante.id,
     nome: $('#piatto-nome').value.trim(),
     descrizione: $('#piatto-desc').value.trim(),
     categoria: $('#piatto-categoria').value,
@@ -993,21 +1030,22 @@ $('#form-piatto').addEventListener('submit', (e) => {
     allergeni,
     immagine
   };
+
   if (id) {
-    const idx = currentRistorante.menu.findIndex(p => p.id === id);
-    if (idx > -1) currentRistorante.menu[idx] = data;
+    const { error } = await supabase.from('piatti').update(data).eq('id', id);
+    if (error) { toast('Errore'); console.error(error); return; }
     toast('Piatto aggiornato');
   } else {
-    currentRistorante.menu.push(data);
+    const { error } = await supabase.from('piatti').insert(data);
+    if (error) { toast('Errore'); console.error(error); return; }
     toast('Piatto aggiunto');
   }
-  syncRist();
   $('#modal-piatto').classList.add('hidden');
-  renderMenuTable($('#search-menu').value);
-  renderRistDashboard();
+  await renderMenuTable($('#search-menu')?.value || '');
+  await renderRistDashboard();
 });
 
-window.editPiatto = function(id) {
+window.editPiatto = async function(id) {
   const p = currentRistorante.menu.find(x => x.id === id);
   if (!p) return;
   $('#modal-piatto-title').textContent = 'Modifica piatto';
@@ -1029,31 +1067,25 @@ window.editPiatto = function(id) {
   $('#modal-piatto').classList.remove('hidden');
 };
 
-window.deletePiatto = function(id) {
+window.deletePiatto = async function(id) {
   if (!confirm('Eliminare questo piatto?')) return;
-  currentRistorante.menu = currentRistorante.menu.filter(p => p.id !== id);
-  syncRist();
-  renderMenuTable($('#search-menu').value);
-  renderRistDashboard();
+  await supabase.from('piatti').delete().eq('id', id);
+  await renderMenuTable($('#search-menu')?.value || '');
+  await renderRistDashboard();
   toast('Piatto eliminato');
 };
 
-function syncRist() {
-  const idx = ristoranti.findIndex(r => r.id === currentRistorante.id);
-  if (idx > -1) ristoranti[idx] = currentRistorante;
-  save();
-}
-
+// =====================================================
 // ORDINI KANBAN
-function renderOrdiniKanban() {
+// =====================================================
+async function renderOrdiniKanban() {
   if (!currentRistorante) return;
-  ensure(currentRistorante);
+  currentRistorante = await loadRistoranteFull(currentRistorante.id);
   const ordini = currentRistorante.ordini || [];
 
   const nuovi = ordini.filter(o => o.stato === 'nuovo');
   const prep = ordini.filter(o => o.stato === 'in_preparazione');
   const pronti = ordini.filter(o => o.stato === 'pronto' || o.stato === 'consegnato');
-  // chiusi non mostrati
 
   $('#count-nuovo').textContent = nuovi.length;
   $('#count-prep').textContent = prep.length;
@@ -1114,67 +1146,59 @@ window.apriDettaglioOrdine = function(ordineId) {
   }
   const nextPag = { in_attesa: 'pagato', pagato: 'non_pagato', non_pagato: 'in_attesa' }[ps] || 'pagato';
   const pagBtnLabel = { pagato: 'Segna pagato', non_pagato: 'Segna non pagato', in_attesa: 'Segna in attesa' }[nextPag];
-  actions += `<button class="btn btn-secondary" onclick="togglePagamento('${o.id}')" title="Clicca per cambiare stato pagamento"><i class="fas fa-money-bill-wave"></i> ${pagBtnLabel}</button>`;
+  actions += `<button class="btn btn-secondary" onclick="togglePagamento('${o.id}')"><i class="fas fa-money-bill-wave"></i> ${pagBtnLabel}</button>`;
   if (o.stato !== 'chiuso') {
     actions += `<button class="btn btn-danger" onclick="chiudiConto('${o.id}')"><i class="fas fa-file-invoice-dollar"></i> Chiudi conto</button>`;
   }
   actions += `<button class="btn btn-secondary close-modal" data-modal="modal-ordine">Chiudi</button>`;
   $('#ordine-detail-actions').innerHTML = actions;
-  // re-bind close
   $('#ordine-detail-actions .close-modal')?.addEventListener('click', () => $('#modal-ordine').classList.add('hidden'));
   $('#modal-ordine').classList.remove('hidden');
 };
 
-window.cambiaStato = function(ordineId, nuovoStato) {
+window.cambiaStato = async function(ordineId, nuovoStato) {
+  await supabase.from('ordini').update({ stato: nuovoStato }).eq('id', ordineId);
+  // aggiorna occupato tavolo
   const o = currentRistorante.ordini.find(x => x.id === ordineId);
-  if (!o) return;
-  o.stato = nuovoStato;
-  // marca tavolo
-  if (nuovoStato === 'consegnato') {
-    const t = (currentRistorante.tavoli || []).find(t => t.numero === o.tavolo);
-    if (t) t.occupato = false;
-  } else {
-    const t = (currentRistorante.tavoli || []).find(t => t.numero === o.tavolo);
-    if (t) t.occupato = true;
+  if (o) {
+    if (nuovoStato === 'consegnato' || nuovoStato === 'chiuso') {
+      await supabase.from('tavoli').update({ occupato: false }).eq('id_ristorante', currentRistorante.id).eq('numero', o.tavolo);
+    } else {
+      await supabase.from('tavoli').update({ occupato: true }).eq('id_ristorante', currentRistorante.id).eq('numero', o.tavolo);
+    }
   }
-  syncRist();
   $('#modal-ordine').classList.add('hidden');
-  renderOrdiniKanban();
-  renderRistDashboard();
+  await renderOrdiniKanban();
+  await renderRistDashboard();
   toast('Stato aggiornato: ' + labelStato(nuovoStato));
 };
 
-window.chiudiConto = function(ordineId) {
-  if (!confirm('Chiudere il conto di questo ordine? Non sarà più visibile nelle colonne attive.')) return;
+window.chiudiConto = async function(ordineId) {
+  if (!confirm('Chiudere il conto di questo ordine?')) return;
   const o = currentRistorante.ordini.find(x => x.id === ordineId);
-  if (!o) return;
-  o.stato = 'chiuso';
-  o.stato_pagamento = 'pagato';
-  const t = (currentRistorante.tavoli || []).find(t => t.numero === o.tavolo);
-  if (t) t.occupato = false;
-  syncRist();
+  await supabase.from('ordini').update({ stato: 'chiuso', stato_pagamento: 'pagato' }).eq('id', ordineId);
+  if (o) await supabase.from('tavoli').update({ occupato: false }).eq('id_ristorante', currentRistorante.id).eq('numero', o.tavolo);
   $('#modal-ordine').classList.add('hidden');
-  renderOrdiniKanban();
-  renderRistDashboard();
-  renderTavoli();
+  await renderOrdiniKanban();
+  await renderRistDashboard();
+  await renderTavoli();
   toast('Conto chiuso e segnato come pagato');
 };
 
-window.togglePagamento = function(ordineId) {
-  if (!currentRistorante) return;
+window.togglePagamento = async function(ordineId) {
   const o = currentRistorante.ordini.find(x => x.id === ordineId);
   if (!o) return;
   const cur = o.stato_pagamento || defaultPagStato(o.pagamento);
   const cycle = { in_attesa: 'pagato', pagato: 'non_pagato', non_pagato: 'in_attesa' };
-  o.stato_pagamento = cycle[cur] || 'pagato';
-  syncRist();
-  renderOrdiniKanban();
-  renderRistDashboard();
+  const next = cycle[cur] || 'pagato';
+  await supabase.from('ordini').update({ stato_pagamento: next }).eq('id', ordineId);
+  await renderOrdiniKanban();
+  await renderRistDashboard();
   apriDettaglioOrdine(ordineId);
-  toast('Stato pagamento: ' + labelPagamentoStato(o.stato_pagamento));
+  toast('Stato pagamento: ' + labelPagamentoStato(next));
 };
 
-// Card navigation + iOS spotlight
+// Card navigation
 document.addEventListener('click', (e) => {
   const card = e.target.closest('.card-tilt');
   if (!card) return;
@@ -1197,15 +1221,20 @@ document.addEventListener('pointermove', (e) => {
   card.style.setProperty('--my', ((e.clientY - r.top) / r.height) * 100 + '%');
 });
 
+// =====================================================
+// TAVOLI + QR (URL reali)
+// =====================================================
+function qrData(ristoranteId, tavolo) {
+  const base = (cfg.SITE_URL || window.location.origin).replace(/\/$/, '');
+  return `${base}/?r=${ristoranteId}&t=${tavolo}`;
+}
 
-// TAVOLI
-function renderTavoli() {
+async function renderTavoli() {
   if (!currentRistorante) return;
-  ensure(currentRistorante);
+  currentRistorante = await loadRistoranteFull(currentRistorante.id);
   const sale = currentRistorante.sale || ['Sala principale'];
   const tavoli = currentRistorante.tavoli || [];
 
-  // tabs sale
   const tabs = $('#sale-tabs');
   tabs.innerHTML = sale.map((s, i) =>
     `<button class="sale-tab ${i === currentSala ? 'active' : ''}" data-sala="${i}">${s}</button>`
@@ -1217,11 +1246,10 @@ function renderTavoli() {
     });
   });
 
-  // piantina
   const salaTavoli = tavoli.filter(t => (t.sala || 0) === currentSala);
   const piantina = $('#piantina');
   if (!salaTavoli.length) {
-    piantina.innerHTML = '<p style="color:var(--muted)">Nessun tavolo in questa sala. Modifica il ristorante per aggiungerne.</p>';
+    piantina.innerHTML = '<p style="color:var(--muted)">Nessun tavolo in questa sala.</p>';
   } else {
     piantina.innerHTML = salaTavoli.map(t => {
       const label = t.bambini ? `${t.adulti}+${t.bambini}` : `${t.adulti}`;
@@ -1235,7 +1263,6 @@ function renderTavoli() {
     }).join('');
   }
 
-  // griglia con QR
   const grid = $('#tavoli-grid');
   grid.innerHTML = '';
   salaTavoli.forEach(t => {
@@ -1253,7 +1280,7 @@ function renderTavoli() {
       </div>
     `;
     grid.appendChild(card);
-    const data = `menupro://ordine?r=${currentRistorante.id}&t=${t.numero}`;
+    const data = qrData(currentRistorante.id, t.numero);
     try {
       new QRCode(card.querySelector(`#qr-mini-${t.numero}`), {
         text: data, width: 110, height: 110, correctLevel: QRCode.CorrectLevel.M
@@ -1265,13 +1292,13 @@ function renderTavoli() {
   });
 }
 
-$('#btn-nuova-sala')?.addEventListener('click', () => {
+$('#btn-nuova-sala')?.addEventListener('click', async () => {
   const nome = prompt('Nome nuova sala:');
   if (!nome || !nome.trim()) return;
-  ensure(currentRistorante);
-  currentRistorante.sale.push(nome.trim());
-  syncRist();
-  renderTavoli();
+  const sale = [...(currentRistorante.sale || []), nome.trim()];
+  await supabase.from('ristoranti').update({ sale }).eq('id', currentRistorante.id);
+  currentRistorante.sale = sale;
+  await renderTavoli();
   toast('Sala aggiunta');
 });
 
@@ -1279,7 +1306,7 @@ window.showQR = function(tavolo) {
   if (!currentRistorante) return;
   const container = $('#qrcode-container');
   container.innerHTML = '';
-  const data = `menupro://ordine?r=${currentRistorante.id}&t=${tavolo}`;
+  const data = qrData(currentRistorante.id, tavolo);
   $('#modal-qr-title').textContent = `QR Tavolo ${tavolo}`;
   $('#qr-info').textContent = `${currentRistorante.nome} · Tavolo ${tavolo}`;
   try {
@@ -1290,20 +1317,18 @@ window.showQR = function(tavolo) {
   $('#modal-qr').classList.remove('hidden');
 };
 
-
-// DEMO RISTORATORE
-$('#btn-demo-ristoratore')?.addEventListener('click', () => {
-  const sel = $('#demo-ristoratore-select');
+$('#btn-demo-ristoratore')?.addEventListener('click', async () => {
+  const ristoranti = await loadRistoranti();
   if (!ristoranti.length) { toast('Crea prima un ristorante'); return; }
+  const sel = $('#demo-ristoratore-select');
   sel.innerHTML = ristoranti.map(r => `<option value="${r.id}">${r.nome}</option>`).join('');
   $('#modal-demo-ristoratore').classList.remove('hidden');
 });
 
-$('#btn-avvia-demo-rist')?.addEventListener('click', () => {
+$('#btn-avvia-demo-rist')?.addEventListener('click', async () => {
   const id = $('#demo-ristoratore-select').value;
-  const r = getRistorante(id);
+  const r = await loadRistoranteFull(id);
   if (!r) return;
-  ensure(r);
   currentUser = { role: 'ristoratore', email: r.email, ristoranteId: r.id, fromAdmin: true };
   currentRistorante = r;
   $('#modal-demo-ristoratore').classList.add('hidden');
@@ -1311,16 +1336,14 @@ $('#btn-avvia-demo-rist')?.addEventListener('click', () => {
   $('#app-ristoratore').classList.remove('hidden');
   $('#rist-nome-sidebar').textContent = r.nome + ' (demo)';
   $('#rist-user-email').textContent = r.email;
-  renderRistDashboard();
-  renderMenuTable();
-  renderOrdiniKanban();
-  renderTavoli();
+  await renderRistDashboard();
+  await renderMenuTable();
+  await renderOrdiniKanban();
+  await renderTavoli();
 });
 
-// TAVOLI CRUD
 $('#btn-nuovo-tavolo')?.addEventListener('click', () => {
   if (!currentRistorante) return;
-  ensure(currentRistorante);
   const maxNum = (currentRistorante.tavoli || []).reduce((m, t) => Math.max(m, t.numero || 0), 0);
   $('#modal-tavolo-title').textContent = 'Nuovo tavolo';
   $('#tavolo-edit-id').value = '';
@@ -1331,35 +1354,28 @@ $('#btn-nuovo-tavolo')?.addEventListener('click', () => {
   $('#modal-tavolo-edit').classList.remove('hidden');
 });
 
-$('#form-tavolo')?.addEventListener('submit', (e) => {
+$('#form-tavolo')?.addEventListener('submit', async (e) => {
   e.preventDefault();
   if (!currentRistorante) return;
-  ensure(currentRistorante);
   const id = $('#tavolo-edit-id').value;
   const data = {
-    id: id || uid(),
+    id_ristorante: currentRistorante.id,
     numero: parseInt($('#tavolo-numero').value) || 1,
     adulti: parseInt($('#tavolo-adulti').value) || 4,
     bambini: parseInt($('#tavolo-bambini').value) || 0,
     sala: currentSala || 0,
-    occupato: false,
     forma: $('#tavolo-forma').value || 'round'
   };
   if (id) {
-    const idx = currentRistorante.tavoli.findIndex(t => t.id === id);
-    if (idx > -1) {
-      data.occupato = currentRistorante.tavoli[idx].occupato;
-      data.sala = currentRistorante.tavoli[idx].sala;
-      currentRistorante.tavoli[idx] = data;
-      toast('Tavolo aggiornato');
-    }
+    await supabase.from('tavoli').update(data).eq('id', id);
+    toast('Tavolo aggiornato');
   } else {
-    currentRistorante.tavoli.push(data);
+    data.occupato = false;
+    await supabase.from('tavoli').insert(data);
     toast('Tavolo aggiunto');
   }
-  syncRist();
   $('#modal-tavolo-edit').classList.add('hidden');
-  renderTavoli();
+  await renderTavoli();
 });
 
 window.editTavolo = function(id) {
@@ -1374,26 +1390,25 @@ window.editTavolo = function(id) {
   $('#modal-tavolo-edit').classList.remove('hidden');
 };
 
-window.deleteTavolo = function(id) {
+window.deleteTavolo = async function(id) {
   if (!confirm('Eliminare questo tavolo?')) return;
-  currentRistorante.tavoli = currentRistorante.tavoli.filter(t => t.id !== id);
-  syncRist();
-  renderTavoli();
+  await supabase.from('tavoli').delete().eq('id', id);
+  await renderTavoli();
   toast('Tavolo eliminato');
 };
 
-// ========== CLIENTE ==========
-
+// =====================================================
+// CLIENTE
+// =====================================================
 function showClienteView(view) {
   ['cliente-menu-view', 'cliente-carrello-view', 'cliente-ricevuta-view', 'cliente-stato-view'].forEach(id => {
-    $(`#${id}`).classList.add('hidden');
+    $(`#${id}`)?.classList.add('hidden');
   });
-  $(`#cliente-${view}-view`).classList.remove('hidden');
+  $(`#cliente-${view}-view`)?.classList.remove('hidden');
 }
 
 function renderClienteMenu() {
   if (!currentRistorante) return;
-  ensure(currentRistorante);
   const menu = (currentRistorante.menu || []).filter(p => p.disponibile !== false);
   const cats = ['tutti', ...new Set(menu.map(p => p.categoria).filter(Boolean))];
   const catEl = $('#cliente-categorie');
@@ -1456,11 +1471,11 @@ function updateCartCount() {
   $('#cart-count').textContent = cart.reduce((s, c) => s + c.qty, 0);
 }
 
-$('#cliente-carrello-btn').addEventListener('click', () => {
+$('#cliente-carrello-btn')?.addEventListener('click', () => {
   renderCarrello();
   showClienteView('carrello');
 });
-$('#btn-torna-menu').addEventListener('click', () => {
+$('#btn-torna-menu')?.addEventListener('click', () => {
   showClienteView('menu');
   renderClienteMenu();
 });
@@ -1488,17 +1503,17 @@ function renderCarrello() {
   $('#carrello-totale').textContent = formatPrice(cart.reduce((s, c) => s + c.prezzo * c.qty, 0));
 }
 
-$('#btn-invia-ordine').addEventListener('click', () => {
+$('#btn-invia-ordine')?.addEventListener('click', async () => {
   if (!cart.length) { toast('Il carrello è vuoto'); return; }
   if (!currentRistorante) return;
-  ensure(currentRistorante);
 
   const totale = cart.reduce((s, c) => s + c.prezzo * c.qty, 0);
   const codice = 'ORD-' + Math.random().toString(36).slice(2, 8).toUpperCase();
   const pagamento = document.querySelector('input[name="pagamento"]:checked')?.value || 'carta';
   const stato_pagamento = defaultPagStato(pagamento);
+
   const ordine = {
-    id: uid(),
+    id_ristorante: currentRistorante.id,
     codice,
     tavolo: currentUser.tavolo,
     items: cart.map(c => ({ id: c.id, nome: c.nome, prezzo: c.prezzo, qty: c.qty })),
@@ -1506,20 +1521,22 @@ $('#btn-invia-ordine').addEventListener('click', () => {
     pagamento,
     stato_pagamento,
     totale,
-    stato: 'nuovo',
-    createdAt: new Date().toISOString()
+    stato: 'nuovo'
   };
-  currentRistorante.ordini.push(ordine);
-  // marca tavolo occupato
-  const t = (currentRistorante.tavoli || []).find(t => t.numero === currentUser.tavolo);
-  if (t) t.occupato = true;
-  syncRist();
-  lastOrdineId = ordine.id;
+
+  const { data: inserted, error } = await supabase.from('ordini').insert(ordine).select().single();
+  if (error) { toast('Errore invio ordine'); console.error(error); return; }
+
+  await supabase.from('tavoli').update({ occupato: true })
+    .eq('id_ristorante', currentRistorante.id)
+    .eq('numero', currentUser.tavolo);
+
+  lastOrdineId = inserted.id;
 
   $('#ricevuta-codice').textContent = codice;
   $('#ricevuta-rist').textContent = currentRistorante.nome;
   $('#ricevuta-tavolo').textContent = currentUser.tavolo;
-  $('#ricevuta-ora').textContent = formatTime(ordine.createdAt);
+  $('#ricevuta-ora').textContent = formatTime(inserted.created_at);
   $('#ricevuta-pagamento').textContent = pagamento === 'cassa' ? 'Pago in cassa' : 'Carta';
   $('#ricevuta-totale').textContent = formatPrice(totale);
   $('#ricevuta-stato').textContent = 'Nuovo';
@@ -1540,12 +1557,9 @@ $('#btn-invia-ordine').addEventListener('click', () => {
   toast('Ordine inviato!');
 });
 
-$('#btn-aggiorna-stato').addEventListener('click', () => {
-  if (!lastOrdineId || !currentRistorante) return;
-  // rileggi da storage
-  ristoranti = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
-  currentRistorante = getRistorante(currentRistorante.id);
-  const o = currentRistorante.ordini.find(x => x.id === lastOrdineId);
+$('#btn-aggiorna-stato')?.addEventListener('click', async () => {
+  if (!lastOrdineId) return;
+  const { data: o } = await supabase.from('ordini').select('*').eq('id', lastOrdineId).single();
   if (o) {
     $('#ricevuta-stato').textContent = labelStato(o.stato);
     $('#ricevuta-stato').className = 'badge-stato ' + o.stato;
@@ -1553,18 +1567,16 @@ $('#btn-aggiorna-stato').addEventListener('click', () => {
   }
 });
 
-$('#btn-nuovo-ordine').addEventListener('click', () => {
+$('#btn-nuovo-ordine')?.addEventListener('click', () => {
   cart = [];
   updateCartCount();
   showClienteView('menu');
   renderClienteMenu();
 });
 
-$('#cliente-stato-btn').addEventListener('click', () => {
-  if (!lastOrdineId || !currentRistorante) return;
-  ristoranti = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
-  currentRistorante = getRistorante(currentRistorante.id);
-  const o = currentRistorante.ordini.find(x => x.id === lastOrdineId);
+$('#cliente-stato-btn')?.addEventListener('click', async () => {
+  if (!lastOrdineId) return;
+  const { data: o } = await supabase.from('ordini').select('*').eq('id', lastOrdineId).single();
   if (!o) return;
   $('#stato-codice').textContent = o.codice;
   const steps = ['nuovo', 'in_preparazione', 'pronto', 'consegnato'];
@@ -1578,7 +1590,7 @@ $('#cliente-stato-btn').addEventListener('click', () => {
   showClienteView('stato');
 });
 
-$('#btn-torna-da-stato').addEventListener('click', () => {
+$('#btn-torna-da-stato')?.addEventListener('click', () => {
   showClienteView('menu');
   renderClienteMenu();
 });
@@ -1590,3 +1602,27 @@ $('#btn-indietro-stato')?.addEventListener('click', () => {
     renderClienteMenu();
   }
 });
+
+// =====================================================
+// AVVIO: se c'è ?r=...&t=... apri come cliente (QR)
+// =====================================================
+(async function initFromQR() {
+  const params = new URLSearchParams(window.location.search);
+  const rId = params.get('r');
+  const t = parseInt(params.get('t'));
+  if (rId && t) {
+    const r = await loadRistoranteFull(rId);
+    if (r) {
+      currentUser = { role: 'cliente', ristoranteId: rId, tavolo: t };
+      currentRistorante = r;
+      cart = [];
+      lastOrdineId = null;
+      $('#login-screen').classList.add('hidden');
+      $('#app-cliente').classList.remove('hidden');
+      $('#cliente-rist-nome').textContent = r.nome;
+      $('#cliente-tavolo-num').textContent = t;
+      showClienteView('menu');
+      renderClienteMenu();
+    }
+  }
+})();
