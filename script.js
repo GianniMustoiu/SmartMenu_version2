@@ -1,10 +1,19 @@
-
 // =====================================================
 // MenuPro – Versione collegata a Supabase
 // =====================================================
 
 const cfg = window.MENUPRO_CONFIG || {};
-const supabase = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
+let sb = null;
+try {
+  if (window.supabase && cfg.SUPABASE_URL && cfg.SUPABASE_ANON_KEY &&
+      !String(cfg.SUPABASE_ANON_KEY).includes('INCOLLA')) {
+    sb = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
+  } else {
+    console.warn('Supabase non configurato correttamente in config.js');
+  }
+} catch (e) {
+  console.error('Errore init Supabase:', e);
+}
 
 let currentUser = null;
 let currentRistorante = null;
@@ -53,21 +62,22 @@ function formatTime(iso) {
 // =====================================================
 
 async function loadRistoranti() {
-  const { data, error } = await supabase.from('ristoranti').select('*').order('creato', { ascending: false });
+  if (!sb) return [];
+  const { data, error } = await sb.from('ristoranti').select('*').order('creato', { ascending: false });
   if (error) { console.error(error); toast('Errore caricamento ristoranti'); return []; }
   return data || [];
 }
 
 async function loadRistoranteFull(id) {
-  const { data: r, error } = await supabase.from('ristoranti').select('*').eq('id', id).single();
+  const { data: r, error } = await sb.from('ristoranti').select('*').eq('id', id).single();
   if (error || !r) return null;
 
   const [tavoli, piatti, categorie, ordini, pagamenti] = await Promise.all([
-    supabase.from('tavoli').select('*').eq('id_ristorante', id).order('numero'),
-    supabase.from('piatti').select('*').eq('id_ristorante', id).order('nome'),
-    supabase.from('categorie').select('*').eq('id_ristorante', id).order('posizione'),
-    supabase.from('ordini').select('*').eq('id_ristorante', id).order('created_at', { ascending: false }),
-    supabase.from('pagamenti_abbonamento').select('*').eq('id_ristorante', id).order('data', { ascending: false })
+    sb.from('tavoli').select('*').eq('id_ristorante', id).order('numero'),
+    sb.from('piatti').select('*').eq('id_ristorante', id).order('nome'),
+    sb.from('categorie').select('*').eq('id_ristorante', id).order('posizione'),
+    sb.from('ordini').select('*').eq('id_ristorante', id).order('created_at', { ascending: false }),
+    sb.from('pagamenti_abbonamento').select('*').eq('id_ristorante', id).order('data', { ascending: false })
   ]);
 
   r.tavoli = tavoli.data || [];
@@ -95,6 +105,37 @@ async function getRistorante(id) {
 // LOGIN
 // =====================================================
 
+async function enterAsAdmin(email) {
+  currentUser = { role: 'admin', email: email || 'admin@menupro.it' };
+  $('#login-screen').classList.add('hidden');
+  $('#app-admin').classList.remove('hidden');
+  $('#admin-user-email').textContent = currentUser.email;
+  try {
+    await renderAdminDashboard();
+    await renderAdminTable();
+    await renderAbbonamenti();
+    await renderMieiIncassi();
+    await populateIncassiSelect();
+  } catch (e) {
+    console.error('Errore render admin:', e);
+  }
+  return true;
+}
+
+async function enterAsRistoratore(r) {
+  currentRistorante = await loadRistoranteFull(r.id || r.ristoranteId);
+  currentUser = { role: 'ristoratore', email: r.email, ristoranteId: r.id || r.ristoranteId };
+  $('#login-screen').classList.add('hidden');
+  $('#app-ristoratore').classList.remove('hidden');
+  $('#rist-nome-sidebar').textContent = (currentRistorante && currentRistorante.nome) || r.nome || 'Ristorante';
+  $('#rist-user-email').textContent = r.email;
+  await renderRistDashboard();
+  await renderMenuTable();
+  await renderOrdiniKanban();
+  await renderTavoli();
+  return true;
+}
+
 async function doLogin(email, pass) {
   email = (email || '').trim().toLowerCase();
   pass = (pass || '').trim();
@@ -104,87 +145,63 @@ async function doLogin(email, pass) {
     return false;
   }
 
-  // 1) Prova tabella utenti (admin e eventuali altri utenti)
+  // ========== 1) API server-side /api/utenti ==========
   try {
-    let query = supabase.from('utenti').select('*').eq('password_hash', pass);
-    if (email) query = query.eq('email', email);
-    const { data: utenti, error: errUtenti } = await query;
-
-    if (errUtenti) {
-      console.error('Errore utenti:', errUtenti);
-      // se la tabella non esiste o RLS blocca, continua con fallback
-    } else if (utenti && utenti.length > 0) {
-      // prendi il primo match (preferisci email esatta se presente)
-      const u = email
-        ? (utenti.find(x => x.email === email) || utenti[0])
-        : utenti.find(x => x.ruolo === 'admin') || utenti[0];
-
-      if (u && u.ruolo === 'admin') {
-        currentUser = { role: 'admin', email: u.email, id: u.id };
-        $('#login-screen').classList.add('hidden');
-        $('#app-admin').classList.remove('hidden');
-        $('#admin-user-email').textContent = u.email;
-        await renderAdminDashboard();
-        await renderAdminTable();
-        await renderAbbonamenti();
-        await renderMieiIncassi();
-        await populateIncassiSelect();
-        return true;
+    const resp = await fetch('/api/utenti', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'login', email, password: pass })
+    });
+    const json = await resp.json().catch(() => null);
+    if (json && json.ok && json.user) {
+      if (json.user.ruolo === 'admin') {
+        return await enterAsAdmin(json.user.email);
+      }
+      if (json.user.ruolo === 'ristoratore') {
+        return await enterAsRistoratore(json.user);
       }
     }
   } catch (e) {
-    console.error('Login utenti fallito:', e);
+    console.warn('API /api/utenti non disponibile, uso fallback client:', e.message);
   }
 
-  // 2) Fallback admin hardcoded (se password = admin)
+  // ========== 2) Fallback locale: password admin ==========
   if (pass.toLowerCase() === 'admin') {
-    if (!email) email = 'admin@menupro.it';
-    currentUser = { role: 'admin', email };
-    $('#login-screen').classList.add('hidden');
-    $('#app-admin').classList.remove('hidden');
-    $('#admin-user-email').textContent = email;
-    await renderAdminDashboard();
-    await renderAdminTable();
-    await renderAbbonamenti();
-    await renderMieiIncassi();
-    await populateIncassiSelect();
-    return true;
+    return await enterAsAdmin(email || 'admin@menupro.it');
   }
 
+  // ========== 3) Fallback client Supabase (ristoratore) ==========
   if (!email) {
     toast('Inserisci email e password');
     return false;
   }
 
-  // 3) Ristoratore (tabella ristoranti)
-  const { data: r, error } = await supabase
-    .from('ristoranti')
-    .select('*')
-    .eq('email', email)
-    .eq('password', pass)
-    .maybeSingle();
-
-  if (error) {
-    console.error(error);
-    toast('Errore di connessione al database. Controlla config.js');
+  if (!sb) {
+    toast('Configura config.js (ANON_KEY) oppure le env su Vercel');
     return false;
   }
 
-  if (r) {
-    currentRistorante = await loadRistoranteFull(r.id);
-    currentUser = { role: 'ristoratore', email, ristoranteId: r.id };
-    $('#login-screen').classList.add('hidden');
-    $('#app-ristoratore').classList.remove('hidden');
-    $('#rist-nome-sidebar').textContent = r.nome;
-    $('#rist-user-email').textContent = email;
-    await renderRistDashboard();
-    await renderMenuTable();
-    await renderOrdiniKanban();
-    await renderTavoli();
-    return true;
+  try {
+    const { data: r, error } = await sb
+      .from('ristoranti')
+      .select('*')
+      .eq('email', email)
+      .eq('password', pass)
+      .maybeSingle();
+
+    if (error) {
+      console.error(error);
+      toast('Errore database: ' + (error.message || 'controlla config.js'));
+      return false;
+    }
+    if (r) return await enterAsRistoratore(r);
+  } catch (e) {
+    console.error(e);
+    toast('Errore di connessione');
+    return false;
   }
 
-  toast('Credenziali non valide. Admin: email admin@menupro.it / password admin');
+  toast('Credenziali non valide. Prova: password admin');
   return false;
 }
 
@@ -430,12 +447,12 @@ async function createDefaultTavoli(ristoranteId, n) {
       forma: 'round'
     });
   }
-  if (rows.length) await supabase.from('tavoli').insert(rows);
+  if (rows.length) await sb.from('tavoli').insert(rows);
 }
 
 async function createDefaultCategorie(ristoranteId) {
   const cats = ['Antipasti', 'Primi', 'Secondi', 'Dolci', 'Bevande'];
-  await supabase.from('categorie').insert(cats.map((nome, i) => ({
+  await sb.from('categorie').insert(cats.map((nome, i) => ({
     id_ristorante: ristoranteId,
     nome,
     posizione: i
@@ -451,7 +468,7 @@ async function createDefaultMenu(ristoranteId) {
     { nome: 'Acqua naturale 75cl', descrizione: '', prezzo: 2.50, categoria: 'Bevande', allergeni: [] },
     { nome: 'Vino della casa (calice)', descrizione: '', prezzo: 4.00, categoria: 'Bevande', allergeni: [] }
   ];
-  await supabase.from('piatti').insert(piatti.map(p => ({
+  await sb.from('piatti').insert(piatti.map(p => ({
     ...p,
     id_ristorante: ristoranteId,
     disponibile: true
@@ -479,12 +496,12 @@ $('#form-ristorante')?.addEventListener('submit', async (e) => {
   if (id) {
     // update
     if (!data.password) delete data.password;
-    const { error } = await supabase.from('ristoranti').update(data).eq('id', id);
+    const { error } = await sb.from('ristoranti').update(data).eq('id', id);
     if (error) { toast('Errore aggiornamento'); console.error(error); return; }
     toast('Ristorante aggiornato');
   } else {
     // insert
-    const { data: inserted, error } = await supabase.from('ristoranti').insert(data).select().single();
+    const { data: inserted, error } = await sb.from('ristoranti').insert(data).select().single();
     if (error) { toast('Errore creazione: ' + error.message); console.error(error); return; }
     await createDefaultTavoli(inserted.id, nTavoli);
     await createDefaultCategorie(inserted.id);
@@ -499,7 +516,7 @@ $('#form-ristorante')?.addEventListener('submit', async (e) => {
 });
 
 window.editRistorante = async function(id) {
-  const { data: r } = await supabase.from('ristoranti').select('*').eq('id', id).single();
+  const { data: r } = await sb.from('ristoranti').select('*').eq('id', id).single();
   if (!r) return;
   $('#modal-title').textContent = 'Modifica ristorante';
   $('#edit-id').value = r.id;
@@ -514,14 +531,14 @@ window.editRistorante = async function(id) {
   $('#id_piano').value = r.id_piano;
   $('#scadenza').value = r.scadenza || '';
   $('#sale').value = (r.sale || []).join(', ');
-  const { count } = await supabase.from('tavoli').select('*', { count: 'exact', head: true }).eq('id_ristorante', id);
+  const { count } = await sb.from('tavoli').select('*', { count: 'exact', head: true }).eq('id_ristorante', id);
   $('#n_tavoli').value = count || 8;
   $('#modal-ristorante').classList.remove('hidden');
 };
 
 window.deleteRistorante = async function(id) {
   if (!confirm('Eliminare questo ristorante?')) return;
-  const { error } = await supabase.from('ristoranti').delete().eq('id', id);
+  const { error } = await sb.from('ristoranti').delete().eq('id', id);
   if (error) { toast('Errore eliminazione'); return; }
   await renderAdminTable($('#search-ristoranti')?.value || '');
   await renderAdminDashboard();
@@ -599,15 +616,15 @@ async function renderAbbonamenti() {
 }
 
 window.estendiAbbonamento = async function(id) {
-  const { data: r } = await supabase.from('ristoranti').select('*').eq('id', id).single();
+  const { data: r } = await sb.from('ristoranti').select('*').eq('id', id).single();
   if (!r) return;
   let d = r.scadenza ? new Date(r.scadenza) : new Date();
   if (d < new Date()) d = new Date();
   d.setMonth(d.getMonth() + 1);
   const nuovaScad = d.toISOString().slice(0, 10);
-  await supabase.from('ristoranti').update({ scadenza: nuovaScad }).eq('id', id);
+  await sb.from('ristoranti').update({ scadenza: nuovaScad }).eq('id', id);
   const prezzo = PIANI[r.id_piano]?.prezzo || 0;
-  await supabase.from('pagamenti_abbonamento').insert({
+  await sb.from('pagamenti_abbonamento').insert({
     id_ristorante: id,
     importo: prezzo,
     piano: r.id_piano,
@@ -629,7 +646,7 @@ async function renderMieiIncassi() {
   const pagamenti = [];
 
   for (const r of ristoranti) {
-    const { data: pags } = await supabase.from('pagamenti_abbonamento').select('*').eq('id_ristorante', r.id);
+    const { data: pags } = await sb.from('pagamenti_abbonamento').select('*').eq('id_ristorante', r.id);
     (pags || []).forEach(p => {
       totale += Number(p.importo);
       const pd = new Date(p.data);
@@ -757,12 +774,12 @@ $('#select-rist-incassi')?.addEventListener('change', async () => {
 // RESET
 $('#btn-reset')?.addEventListener('click', async () => {
   if (!confirm('Cancellare TUTTI i dati? Questa operazione non si può annullare.')) return;
-  await supabase.from('pagamenti_abbonamento').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-  await supabase.from('ordini').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-  await supabase.from('piatti').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-  await supabase.from('categorie').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-  await supabase.from('tavoli').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-  await supabase.from('ristoranti').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+  await sb.from('pagamenti_abbonamento').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+  await sb.from('ordini').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+  await sb.from('piatti').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+  await sb.from('categorie').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+  await sb.from('tavoli').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+  await sb.from('ristoranti').delete().neq('id', '00000000-0000-0000-0000-000000000000');
   await renderAdminTable();
   await renderAdminDashboard();
   await renderAbbonamenti();
@@ -1041,7 +1058,7 @@ $('#form-categoria')?.addEventListener('submit', async (e) => {
   const nome = $('#cat-nome').value.trim();
   if (!nome || !currentRistorante) return;
   if (!(currentRistorante.categorie || []).includes(nome)) {
-    await supabase.from('categorie').insert({
+    await sb.from('categorie').insert({
       id_ristorante: currentRistorante.id,
       nome,
       posizione: (currentRistorante.categorie || []).length
@@ -1074,11 +1091,11 @@ $('#form-piatto')?.addEventListener('submit', async (e) => {
   };
 
   if (id) {
-    const { error } = await supabase.from('piatti').update(data).eq('id', id);
+    const { error } = await sb.from('piatti').update(data).eq('id', id);
     if (error) { toast('Errore'); console.error(error); return; }
     toast('Piatto aggiornato');
   } else {
-    const { error } = await supabase.from('piatti').insert(data);
+    const { error } = await sb.from('piatti').insert(data);
     if (error) { toast('Errore'); console.error(error); return; }
     toast('Piatto aggiunto');
   }
@@ -1111,7 +1128,7 @@ window.editPiatto = async function(id) {
 
 window.deletePiatto = async function(id) {
   if (!confirm('Eliminare questo piatto?')) return;
-  await supabase.from('piatti').delete().eq('id', id);
+  await sb.from('piatti').delete().eq('id', id);
   await renderMenuTable($('#search-menu')?.value || '');
   await renderRistDashboard();
   toast('Piatto eliminato');
@@ -1199,14 +1216,14 @@ window.apriDettaglioOrdine = function(ordineId) {
 };
 
 window.cambiaStato = async function(ordineId, nuovoStato) {
-  await supabase.from('ordini').update({ stato: nuovoStato }).eq('id', ordineId);
+  await sb.from('ordini').update({ stato: nuovoStato }).eq('id', ordineId);
   // aggiorna occupato tavolo
   const o = currentRistorante.ordini.find(x => x.id === ordineId);
   if (o) {
     if (nuovoStato === 'consegnato' || nuovoStato === 'chiuso') {
-      await supabase.from('tavoli').update({ occupato: false }).eq('id_ristorante', currentRistorante.id).eq('numero', o.tavolo);
+      await sb.from('tavoli').update({ occupato: false }).eq('id_ristorante', currentRistorante.id).eq('numero', o.tavolo);
     } else {
-      await supabase.from('tavoli').update({ occupato: true }).eq('id_ristorante', currentRistorante.id).eq('numero', o.tavolo);
+      await sb.from('tavoli').update({ occupato: true }).eq('id_ristorante', currentRistorante.id).eq('numero', o.tavolo);
     }
   }
   $('#modal-ordine').classList.add('hidden');
@@ -1218,8 +1235,8 @@ window.cambiaStato = async function(ordineId, nuovoStato) {
 window.chiudiConto = async function(ordineId) {
   if (!confirm('Chiudere il conto di questo ordine?')) return;
   const o = currentRistorante.ordini.find(x => x.id === ordineId);
-  await supabase.from('ordini').update({ stato: 'chiuso', stato_pagamento: 'pagato' }).eq('id', ordineId);
-  if (o) await supabase.from('tavoli').update({ occupato: false }).eq('id_ristorante', currentRistorante.id).eq('numero', o.tavolo);
+  await sb.from('ordini').update({ stato: 'chiuso', stato_pagamento: 'pagato' }).eq('id', ordineId);
+  if (o) await sb.from('tavoli').update({ occupato: false }).eq('id_ristorante', currentRistorante.id).eq('numero', o.tavolo);
   $('#modal-ordine').classList.add('hidden');
   await renderOrdiniKanban();
   await renderRistDashboard();
@@ -1233,7 +1250,7 @@ window.togglePagamento = async function(ordineId) {
   const cur = o.stato_pagamento || defaultPagStato(o.pagamento);
   const cycle = { in_attesa: 'pagato', pagato: 'non_pagato', non_pagato: 'in_attesa' };
   const next = cycle[cur] || 'pagato';
-  await supabase.from('ordini').update({ stato_pagamento: next }).eq('id', ordineId);
+  await sb.from('ordini').update({ stato_pagamento: next }).eq('id', ordineId);
   await renderOrdiniKanban();
   await renderRistDashboard();
   apriDettaglioOrdine(ordineId);
@@ -1338,7 +1355,7 @@ $('#btn-nuova-sala')?.addEventListener('click', async () => {
   const nome = prompt('Nome nuova sala:');
   if (!nome || !nome.trim()) return;
   const sale = [...(currentRistorante.sale || []), nome.trim()];
-  await supabase.from('ristoranti').update({ sale }).eq('id', currentRistorante.id);
+  await sb.from('ristoranti').update({ sale }).eq('id', currentRistorante.id);
   currentRistorante.sale = sale;
   await renderTavoli();
   toast('Sala aggiunta');
@@ -1409,11 +1426,11 @@ $('#form-tavolo')?.addEventListener('submit', async (e) => {
     forma: $('#tavolo-forma').value || 'round'
   };
   if (id) {
-    await supabase.from('tavoli').update(data).eq('id', id);
+    await sb.from('tavoli').update(data).eq('id', id);
     toast('Tavolo aggiornato');
   } else {
     data.occupato = false;
-    await supabase.from('tavoli').insert(data);
+    await sb.from('tavoli').insert(data);
     toast('Tavolo aggiunto');
   }
   $('#modal-tavolo-edit').classList.add('hidden');
@@ -1434,7 +1451,7 @@ window.editTavolo = function(id) {
 
 window.deleteTavolo = async function(id) {
   if (!confirm('Eliminare questo tavolo?')) return;
-  await supabase.from('tavoli').delete().eq('id', id);
+  await sb.from('tavoli').delete().eq('id', id);
   await renderTavoli();
   toast('Tavolo eliminato');
 };
@@ -1566,10 +1583,10 @@ $('#btn-invia-ordine')?.addEventListener('click', async () => {
     stato: 'nuovo'
   };
 
-  const { data: inserted, error } = await supabase.from('ordini').insert(ordine).select().single();
+  const { data: inserted, error } = await sb.from('ordini').insert(ordine).select().single();
   if (error) { toast('Errore invio ordine'); console.error(error); return; }
 
-  await supabase.from('tavoli').update({ occupato: true })
+  await sb.from('tavoli').update({ occupato: true })
     .eq('id_ristorante', currentRistorante.id)
     .eq('numero', currentUser.tavolo);
 
@@ -1601,7 +1618,7 @@ $('#btn-invia-ordine')?.addEventListener('click', async () => {
 
 $('#btn-aggiorna-stato')?.addEventListener('click', async () => {
   if (!lastOrdineId) return;
-  const { data: o } = await supabase.from('ordini').select('*').eq('id', lastOrdineId).single();
+  const { data: o } = await sb.from('ordini').select('*').eq('id', lastOrdineId).single();
   if (o) {
     $('#ricevuta-stato').textContent = labelStato(o.stato);
     $('#ricevuta-stato').className = 'badge-stato ' + o.stato;
@@ -1618,7 +1635,7 @@ $('#btn-nuovo-ordine')?.addEventListener('click', () => {
 
 $('#cliente-stato-btn')?.addEventListener('click', async () => {
   if (!lastOrdineId) return;
-  const { data: o } = await supabase.from('ordini').select('*').eq('id', lastOrdineId).single();
+  const { data: o } = await sb.from('ordini').select('*').eq('id', lastOrdineId).single();
   if (!o) return;
   $('#stato-codice').textContent = o.codice;
   const steps = ['nuovo', 'in_preparazione', 'pronto', 'consegnato'];
