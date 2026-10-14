@@ -158,6 +158,11 @@ async function doLogin(email, pass) {
         return await enterAsAdmin(json.user.email);
       }
       if (json.user.ruolo === 'ristoratore') {
+        // se l'API non manda ristoranteId, cercalo per email
+        if (!json.user.ristoranteId && !json.user.id && sb) {
+          const { data: r } = await sb.from('ristoranti').select('*').eq('email', json.user.email).maybeSingle();
+          if (r) return await enterAsRistoratore(r);
+        }
         return await enterAsRistoratore(json.user);
       }
     }
@@ -170,7 +175,7 @@ async function doLogin(email, pass) {
     return await enterAsAdmin(email || 'admin@menupro.it');
   }
 
-  // ========== 3) Fallback client Supabase (ristoratore) ==========
+  // ========== 3) Fallback client: tabella utenti ==========
   if (!email) {
     toast('Inserisci email e password');
     return false;
@@ -182,6 +187,26 @@ async function doLogin(email, pass) {
   }
 
   try {
+    // prima cerca in utenti (ristoratore)
+    const { data: u } = await sb
+      .from('utenti')
+      .select('*')
+      .eq('email', email)
+      .eq('password_hash', pass)
+      .maybeSingle();
+
+    if (u && u.ruolo === 'admin') {
+      return await enterAsAdmin(u.email);
+    }
+
+    if (u && u.ruolo === 'ristoratore') {
+      const { data: r } = await sb.from('ristoranti').select('*').eq('email', email).maybeSingle();
+      if (r) return await enterAsRistoratore(r);
+      toast('Utente trovato ma nessun ristorante collegato a questa email');
+      return false;
+    }
+
+    // poi cerca direttamente in ristoranti (compatibilità)
     const { data: r, error } = await sb
       .from('ristoranti')
       .select('*')
@@ -477,36 +502,101 @@ async function createDefaultMenu(ristoranteId) {
 
 $('#form-ristorante')?.addEventListener('submit', async (e) => {
   e.preventDefault();
+  if (!sb) {
+    toast('Database non collegato: controlla config.js (ANON_KEY)');
+    return;
+  }
+
   const id = $('#edit-id').value;
   const saleStr = $('#sale').value.trim() || 'Sala principale';
   const sale = saleStr.split(',').map(s => s.trim()).filter(Boolean);
   const nTavoli = parseInt($('#n_tavoli').value) || 8;
 
+  const email = $('#email').value.trim().toLowerCase();
+  const password = $('#password').value;
+  const nomeRist = $('#nome').value.trim();
+  const titolare = $('#titolare').value.trim();
+
+  if (!email) {
+    toast('Email ristoratore obbligatoria');
+    return;
+  }
+
   const data = {
-    nome: $('#nome').value.trim(),
-    titolare: $('#titolare').value.trim(),
+    nome: nomeRist,
+    titolare,
     citta: $('#citta').value.trim(),
-    email: $('#email').value.trim().toLowerCase(),
-    password: $('#password').value,
+    email,
+    password: password || undefined,
     id_piano: $('#id_piano').value,
     scadenza: $('#scadenza').value || null,
     sale
   };
 
   if (id) {
-    // update
+    // --- MODIFICA ristorante ---
     if (!data.password) delete data.password;
     const { error } = await sb.from('ristoranti').update(data).eq('id', id);
-    if (error) { toast('Errore aggiornamento'); console.error(error); return; }
-    toast('Ristorante aggiornato');
+    if (error) {
+      toast('Errore aggiornamento ristorante: ' + error.message);
+      console.error(error);
+      return;
+    }
+
+    // aggiorna/crea anche l'UTENTE ristoratore
+    const utenteUpdate = { nome: titolare || nomeRist, ruolo: 'ristoratore' };
+    if (password) utenteUpdate.password_hash = password;
+
+    const { data: existingUser } = await sb.from('utenti').select('id').eq('email', email).maybeSingle();
+    if (existingUser) {
+      const { error: errU } = await sb.from('utenti').update(utenteUpdate).eq('id', existingUser.id);
+      if (errU) console.error('Errore update utente:', errU);
+    } else if (password) {
+      const { error: errU } = await sb.from('utenti').insert({
+        email,
+        password_hash: password,
+        ruolo: 'ristoratore',
+        nome: titolare || nomeRist
+      });
+      if (errU) console.error('Errore create utente:', errU);
+    }
+    toast('Ristorante e utente aggiornati');
   } else {
-    // insert
-    const { data: inserted, error } = await sb.from('ristoranti').insert(data).select().single();
-    if (error) { toast('Errore creazione: ' + error.message); console.error(error); return; }
+    // --- NUOVO ristorante + UTENTE ---
+    if (!password) {
+      toast('Password obbligatoria per il ristoratore');
+      return;
+    }
+
+    const { data: inserted, error } = await sb.from('ristoranti').insert({
+      ...data,
+      password
+    }).select().single();
+
+    if (error) {
+      toast('Errore creazione ristorante: ' + error.message);
+      console.error(error);
+      return;
+    }
+
+    // crea l'UTENTE ristoratore (email + password + nome)
+    const { error: errUser } = await sb.from('utenti').insert({
+      email,
+      password_hash: password,
+      ruolo: 'ristoratore',
+      nome: titolare || nomeRist
+    });
+
+    if (errUser) {
+      console.error('Errore creazione utente:', errUser);
+      toast('Ristorante creato, ma utente non salvato: ' + errUser.message);
+    } else {
+      toast('Ristorante e utente ristoratore creati');
+    }
+
     await createDefaultTavoli(inserted.id, nTavoli);
     await createDefaultCategorie(inserted.id);
     await createDefaultMenu(inserted.id);
-    toast('Ristorante creato con menu di esempio');
   }
 
   $('#modal-ristorante').classList.add('hidden');
