@@ -38,7 +38,7 @@
           <i class="fas fa-sign-in-alt"></i> Accedi
         </button>
         <p class="hint">
-          <strong>Admin:</strong> email e password creati dal super-admin<br>
+          <strong>Admin:</strong> email e password dell'account creato (non basta la sola password generica)<br>
           <strong>Ristoratore:</strong> email e password del ristorante<br>
           <button type="button" id="btn-crea-primo-admin" class="btn btn-secondary btn-sm" style="margin-top:10px">
             <i class="fas fa-user-plus"></i> Crea account admin
@@ -70,7 +70,7 @@
           <i class="fas fa-store"></i> Entra nell'area ristoratore
         </button>
         <div style="display:flex;gap:12px">
-          <button class="btn-icon theme-toggle" title="Tema"><i class="fas fa-moon"></i></button>
+          <button class="btn-icon theme-toggle" title="Tema chiaro/scuro"><i class="fas fa-sun"></i></button>
           <button class="btn-icon logout-btn" title="Esci"><i class="fas fa-sign-out-alt"></i></button>
         </div>
       </div>
@@ -239,7 +239,7 @@
         <a href="#" class="nav-item" data-page="rist-tavoli"><i class="fas fa-qrcode"></i> <span>Tavoli &amp; QR</span></a>
       </nav>
       <div class="sidebar-footer">
-        <button class="btn-icon theme-toggle" title="Tema"><i class="fas fa-moon"></i></button>
+        <button class="btn-icon theme-toggle" title="Tema chiaro/scuro"><i class="fas fa-sun"></i></button>
         <button class="btn-icon logout-btn" title="Esci"><i class="fas fa-sign-out-alt"></i></button>
       </div>
     </aside>
@@ -416,7 +416,10 @@
           <div class="ricevuta-stato" style="margin-top:8px">
             Pagamento: <span id="ricevuta-pag-stato" class="badge-pag in_attesa">In attesa</span>
           </div>
-          <button id="btn-aggiorna-stato" class="btn btn-secondary btn-block" style="margin-top:16px">
+          <p class="auto-status-hint" style="margin-top:14px;font-size:12px;color:var(--muted)">
+            <i class="fas fa-sync fa-spin" style="margin-right:6px"></i> Stato aggiornato automaticamente
+          </p>
+          <button id="btn-aggiorna-stato" class="btn btn-secondary btn-block" style="margin-top:10px;display:none">
             <i class="fas fa-sync"></i> Aggiorna stato
           </button>
           <button id="btn-nuovo-ordine" class="btn btn-primary btn-block" style="margin-top:10px">
