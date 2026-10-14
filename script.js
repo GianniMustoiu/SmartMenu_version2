@@ -1,1992 +1,1321 @@
-// =====================================================
-// MenuPro – Versione collegata a Supabase
-// =====================================================
-
-const cfg = window.MENUPRO_CONFIG || {};
-let sb = null;
-try {
-  if (window.supabase && cfg.SUPABASE_URL && cfg.SUPABASE_ANON_KEY &&
-      !String(cfg.SUPABASE_ANON_KEY).includes('INCOLLA')) {
-    sb = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
-  } else {
-    console.warn('Supabase non configurato correttamente in config.js');
-  }
-} catch (e) {
-  console.error('Errore init Supabase:', e);
-}
-window.sb = sb; // per debug in console
-if (!sb) console.warn('ATTENZIONE: sb è null — controlla config.js');
-
-let currentUser = null;
-let currentRistorante = null;
-let cart = [];
-let currentPeriod = 'oggi';
-let currentSala = 0;
-let menuFilterCat = 'tutti';
-let lastOrdineId = null;
-
-let chartRicaviAdmin = null;
-let chartPianiAdmin = null;
-let chartIncassiRist = null;
-let chartStatiRist = null;
-
-const PIANI = {
-  base: { nome: 'Base', prezzo: 29 },
-  pro: { nome: 'Pro', prezzo: 59 },
-  enterprise: { nome: 'Enterprise', prezzo: 129 }
-};
-
-const $ = (s) => document.querySelector(s);
-const $$ = (s) => document.querySelectorAll(s);
-
-function toast(msg) {
-  const t = $('#toast');
-  if (!t) return;
-  t.textContent = msg;
-  t.classList.remove('hidden');
-  setTimeout(() => t.classList.add('hidden'), 2800);
+/* MenuPro – palette blu notte (tutte le interfacce) */
+:root {
+  --bg: #0b1220;
+  --card: #121a2b;
+  --text: #e8eef8;
+  --muted: #8b9bb8;
+  --primary: #3b82f6;
+  --primary-dark: #2563eb;
+  --primary-soft: rgba(59, 130, 246, 0.18);
+  --sidebar: #070d18;
+  --sidebar-text: #c7d2e8;
+  --border: #1e2a44;
+  --success: #34d399;
+  --danger: #f87171;
+  --orange: #fbbf24;
+  --purple: #818cf8;
+  --blue: #60a5fa;
+  --shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+  --radius: 10px;
+  --font: "Segoe UI", system-ui, -apple-system, sans-serif;
 }
 
-function uid() {
-  return crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2);
+/* Tema chiaro opzionale (toggle) */
+[data-theme="light"] {
+  --bg: #eef3fb;
+  --card: #ffffff;
+  --text: #0f172a;
+  --muted: #64748b;
+  --primary: #2563eb;
+  --primary-dark: #1d4ed8;
+  --primary-soft: rgba(37, 99, 235, 0.12);
+  --sidebar: #0f172a;
+  --sidebar-text: #e2e8f0;
+  --border: #d5deee;
+  --success: #059669;
+  --danger: #dc2626;
+  --orange: #d97706;
+  --purple: #7c3aed;
+  --blue: #3b82f6;
+  --shadow: 0 2px 12px rgba(15, 23, 42, 0.08);
 }
 
-function formatPrice(n) {
-  return '€' + Number(n).toFixed(2).replace('.', ',');
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.55;
+  letter-spacing: 0.01em;
 }
 
-function formatTime(iso) {
-  return new Date(iso).toLocaleString('it-IT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+.hidden { display: none !important; }
+
+/* LOGIN */
+.login-screen {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background:
+    radial-gradient(ellipse at 20% 80%, rgba(59,130,246,0.28), transparent 50%),
+    radial-gradient(ellipse at 80% 20%, rgba(30,58,138,0.35), transparent 45%),
+    #070d18;
+  padding: 24px;
+}
+.login-card {
+  background: var(--card);
+  padding: 36px 32px;
+  border-radius: 16px;
+  width: 100%;
+  max-width: 400px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.25);
+  border: 1px solid rgba(255,255,255,0.06);
+}
+.logo { text-align: center; margin-bottom: 26px; }
+.logo i { font-size: 42px; color: var(--primary); }
+.logo h1 { font-size: 26px; margin: 10px 0 4px; font-weight: 700; letter-spacing: -0.02em; }
+.logo p { color: var(--muted); font-size: 14px; }
+
+.form-group { margin-bottom: 15px; }
+.form-group label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 5px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.form-group input,
+.form-group select,
+.form-group textarea {
+  width: 100%;
+  padding: 11px 13px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 15px;
+  font-family: inherit;
+}
+.form-group input:focus,
+.form-group select:focus,
+.form-group textarea:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-soft);
+}
+.form-group textarea { resize: none; overflow: hidden; min-height: 56px; }
+
+.password-wrap { position: relative; }
+.password-wrap input { padding-right: 42px; }
+.toggle-pass {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 15px;
+  padding: 4px;
 }
 
-// =====================================================
-// SUPABASE HELPERS
-// =====================================================
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 10px 18px;
+  border: none;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background .15s, transform .1s;
+  white-space: nowrap;
+  font-family: inherit;
+}
+.btn:active { transform: scale(0.98); }
+.btn-primary { background: var(--primary); color: #fff; }
+.btn-primary:hover { background: var(--primary-dark); }
+.btn-secondary { background: var(--border); color: var(--text); }
+.btn-secondary:hover { filter: brightness(0.95); }
+.btn-danger { background: var(--danger); color: #fff; }
+.btn-block { width: 100%; }
+.btn-sm { padding: 7px 12px; font-size: 13px; border-radius: 7px; }
+.hint { text-align: center; font-size: 12px; color: var(--muted); margin-top: 16px; line-height: 1.65; }
+.hint code {
+  background: var(--bg);
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+}
+.hint-inline { color: var(--muted); font-size: 14px; }
 
-async function loadRistoranti() {
-  if (!sb) return [];
-  const { data, error } = await sb.from('ristoranti').select('*').order('creato', { ascending: false });
-  if (error) { console.error(error); toast('Errore caricamento ristoranti'); return []; }
-  return data || [];
+/* APP */
+.app { display: flex; min-height: 100vh; }
+.sidebar {
+  width: 232px;
+  background: var(--sidebar);
+  color: var(--sidebar-text);
+  display: flex;
+  flex-direction: column;
+  padding: 18px 0;
+  flex-shrink: 0;
+}
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 20px 26px;
+  font-size: 17px;
+  font-weight: 700;
+}
+.sidebar-header i { color: var(--primary); font-size: 20px; }
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 11px 20px;
+  color: var(--sidebar-text);
+  text-decoration: none;
+  transition: .15s;
+  position: relative;
+  font-size: 14px;
+  opacity: 0.85;
+}
+.nav-item:hover, .nav-item.active {
+  background: rgba(59,130,246,0.2);
+  color: #93c5fd;
+  opacity: 1;
+}
+.nav-badge {
+  background: var(--danger);
+  color: white;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 10px;
+  margin-left: auto;
+}
+.sidebar-footer { margin-top: auto; padding: 14px 16px; }
+.btn-icon {
+  background: rgba(255,255,255,0.07);
+  border: none;
+  color: var(--sidebar-text);
+  width: 38px;
+  height: 38px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 15px;
+}
+.btn-icon:hover { background: rgba(255,255,255,0.12); }
+
+.main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.topbar {
+  background: var(--card);
+  padding: 16px 26px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+}
+.topbar h2 { font-size: 20px; font-weight: 700; letter-spacing: -0.02em; }
+.topbar-right { color: var(--muted); font-size: 13px; }
+.page { padding: 26px; flex: 1; }
+
+/* CARDS */
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 16px;
+  margin-bottom: 26px;
+}
+.card {
+  background: var(--card);
+  border-radius: var(--radius);
+  padding: 18px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  box-shadow: var(--shadow);
+  border: 1px solid var(--border);
+}
+.card-icon {
+  width: 46px;
+  height: 46px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  color: white;
+  flex-shrink: 0;
+}
+.card-icon.blue { background: var(--blue); }
+.card-icon.green { background: var(--success); }
+.card-icon.orange { background: var(--orange); }
+.card-icon.purple { background: var(--purple); }
+.card h3 { font-size: 22px; font-weight: 700; }
+.card p { color: var(--muted); font-size: 12px; margin-top: 2px; }
+
+.recent-box {
+  background: var(--card);
+  border-radius: var(--radius);
+  padding: 20px;
+  box-shadow: var(--shadow);
+  border: 1px solid var(--border);
+}
+.recent-box h3 { margin-bottom: 14px; font-size: 16px; }
+.recent-list { display: flex; flex-direction: column; gap: 8px; }
+.recent-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 11px 14px;
+  background: var(--bg);
+  border-radius: 8px;
+  font-size: 13px;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
-async function loadRistoranteFull(id) {
-  const { data: r, error } = await sb.from('ristoranti').select('*').eq('id', id).single();
-  if (error || !r) return null;
+.toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+.search-box { position: relative; flex: 1; max-width: 340px; }
+.search-box i {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--muted);
+  font-size: 13px;
+}
+.search-box input {
+  width: 100%;
+  padding: 10px 12px 10px 36px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--text);
+  font-family: inherit;
+}
+.table-wrapper {
+  background: var(--card);
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: var(--shadow);
+  border: 1px solid var(--border);
+  overflow-x: auto;
+}
+table { width: 100%; border-collapse: collapse; }
+th, td { padding: 12px 16px; text-align: left; }
+th {
+  background: var(--bg);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--muted);
+  font-weight: 600;
+}
+td { border-top: 1px solid var(--border); font-size: 13px; }
+.badge {
+  display: inline-block;
+  padding: 3px 9px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.badge-base { background: #1e3a5f; color: #93c5fd; }
+.badge-pro { background: #14532d; color: #86efac; }
+.badge-enterprise { background: #312e81; color: #c4b5fd; }
+.actions { display: flex; gap: 6px; }
 
-  const [tavoli, piatti, categorie, ordini, pagamenti] = await Promise.all([
-    sb.from('tavoli').select('*').eq('id_ristorante', id).order('numero'),
-    sb.from('piatti').select('*').eq('id_ristorante', id).order('nome'),
-    sb.from('categorie').select('*').eq('id_ristorante', id).order('posizione'),
-    sb.from('ordini').select('*').eq('id_ristorante', id).order('created_at', { ascending: false }),
-    sb.from('pagamenti_abbonamento').select('*').eq('id_ristorante', id).order('data', { ascending: false })
-  ]);
-
-  r.tavoli = tavoli.data || [];
-  r.menu = (piatti.data || []).map(p => ({
-    ...p,
-    allergeni: p.allergeni || []
-  }));
-  r.categorie = (categorie.data || []).map(c => c.nome);
-  if (!r.categorie.length) r.categorie = ['Antipasti', 'Primi', 'Secondi', 'Dolci', 'Bevande'];
-  r.ordini = (ordini.data || []).map(o => ({
-    ...o,
-    items: o.items || [],
-    createdAt: o.created_at
-  }));
-  r.pagamenti = pagamenti.data || [];
-  r.sale = r.sale || ['Sala principale'];
-  return r;
+.period-tabs, .sale-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+.period-btn, .sale-tab {
+  padding: 7px 14px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--card);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: .15s;
+  font-family: inherit;
+}
+.period-btn.active, .period-btn:hover,
+.sale-tab.active, .sale-tab:hover {
+  background: var(--primary);
+  color: white;
+  border-color: var(--primary);
 }
 
-async function getRistorante(id) {
-  return loadRistoranteFull(id);
+.plans-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 16px;
+}
+.plan-card {
+  background: var(--card);
+  border-radius: var(--radius);
+  padding: 24px;
+  box-shadow: var(--shadow);
+  position: relative;
+  border: 1px solid var(--border);
+}
+.plan-card.featured { border-color: var(--primary); border-width: 2px; }
+.plan-badge {
+  position: absolute;
+  top: -11px;
+  right: 16px;
+  background: var(--primary);
+  color: white;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 11px;
+  border-radius: 20px;
+}
+.plan-card h3 { font-size: 18px; margin-bottom: 6px; }
+.plan-price { font-size: 28px; font-weight: 700; color: var(--primary); margin-bottom: 14px; }
+.plan-price span { font-size: 13px; font-weight: 400; color: var(--muted); }
+.plan-card ul { list-style: none; }
+.plan-card li { padding: 5px 0; font-size: 13px; color: var(--muted); }
+.plan-card li i { color: var(--success); margin-right: 7px; font-size: 12px; }
+
+.categorie-chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.cat-chip {
+  padding: 6px 13px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  color: var(--text);
+  transition: .15s;
+  font-family: inherit;
+}
+.cat-chip.active, .cat-chip:hover {
+  background: var(--primary);
+  color: white;
+  border-color: var(--primary);
 }
 
-// =====================================================
-// LOGIN
-// =====================================================
+.allergeni-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 6px;
+  margin-top: 6px;
+}
+.check-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  cursor: pointer;
+}
+.check-label input { width: auto; accent-color: var(--primary); }
+.check-label.inline-check { flex-direction: row; gap: 9px; }
+.check-label.inline-check span { font-weight: 600; text-transform: none; letter-spacing: 0; font-size: 14px; color: var(--text); }
 
-async function enterAsAdmin(email) {
-  currentUser = { role: 'admin', email: email || 'admin@menupro.it' };
-  $('#login-screen').classList.add('hidden');
-  $('#app-admin').classList.remove('hidden');
-  $('#admin-user-email').textContent = currentUser.email;
-  try {
-    await renderAdminDashboard();
-    await renderAdminTable();
-    await renderAbbonamenti();
-    await renderMieiIncassi();
-    await populateIncassiSelect();
-  } catch (e) {
-    console.error('Errore render admin:', e);
-  }
-  return true;
+/* KANBAN */
+.kanban {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+  height: calc(100vh - 150px);
+  min-height: 380px;
+}
+.kanban-col {
+  background: var(--bg);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.kanban-header {
+  padding: 12px 14px;
+  font-weight: 700;
+  font-size: 13px;
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.kanban-count {
+  background: var(--primary);
+  color: white;
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 10px;
+  margin-left: auto;
+}
+.kanban-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.kanban-card {
+  background: var(--card);
+  border-radius: 8px;
+  padding: 12px;
+  box-shadow: var(--shadow);
+  cursor: pointer;
+  transition: .15s;
+  border-left: 3px solid var(--orange);
+}
+.kanban-card:hover { box-shadow: 0 4px 16px rgba(44,36,22,0.1); }
+.kanban-card.stato-in_preparazione { border-left-color: var(--blue); }
+.kanban-card.stato-pronto, .kanban-card.stato-consegnato { border-left-color: var(--success); }
+.kanban-card h4 { font-size: 13px; margin-bottom: 4px; }
+.kanban-card p { font-size: 12px; color: var(--muted); }
+.badge-stato {
+  display: inline-block;
+  padding: 3px 9px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.badge-stato.nuovo { background: #422006; color: #fbbf24; }
+.badge-stato.in_preparazione { background: #1e3a5f; color: #93c5fd; }
+.badge-stato.pronto { background: #14532d; color: #86efac; }
+.badge-stato.consegnato, .badge-stato.chiuso { background: #1e293b; color: #94a3b8; }
+
+/* PIANTINA */
+.piantina {
+  background: var(--card);
+  border-radius: var(--radius);
+  padding: 20px;
+  box-shadow: var(--shadow);
+  min-height: 180px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  border: 1px solid var(--border);
+}
+.tavolo-shape {
+  width: 74px;
+  height: 74px;
+  border-radius: 10px;
+  background: var(--bg);
+  border: 2px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: .15s;
+  font-size: 12px;
+  font-weight: 600;
+}
+.tavolo-shape:hover { border-color: var(--primary); }
+.tavolo-shape.occupato { background: #f5e6c8; border-color: var(--orange); }
+.tavolo-shape.round { border-radius: 50%; }
+.tavolo-shape .posti { font-size: 10px; color: var(--muted); margin-top: 2px; }
+
+.tavoli-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 16px;
+}
+.tavolo-card {
+  background: var(--card);
+  border-radius: var(--radius);
+  padding: 16px;
+  box-shadow: var(--shadow);
+  text-align: center;
+  border: 1px solid var(--border);
+}
+.tavolo-card h4 { margin-bottom: 6px; font-size: 14px; }
+.tavolo-card .posti-info { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+.tavolo-card .qr-mini {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 10px;
+}
+.tavolo-card .qr-mini canvas,
+.tavolo-card .qr-mini img { max-width: 100px; height: auto; }
+.tavolo-actions {
+  display: flex;
+  gap: 5px;
+  justify-content: center;
+  margin-top: 6px;
+  flex-wrap: wrap;
 }
 
-async function enterAsRistoratore(r) {
-  currentRistorante = await loadRistoranteFull(r.id || r.ristoranteId);
-  currentUser = { role: 'ristoratore', email: r.email, ristoranteId: r.id || r.ristoranteId };
-  $('#login-screen').classList.add('hidden');
-  $('#app-ristoratore').classList.remove('hidden');
-  $('#rist-nome-sidebar').textContent = (currentRistorante && currentRistorante.nome) || r.nome || 'Ristorante';
-  $('#rist-user-email').textContent = r.email;
-  await renderRistDashboard();
-  await renderMenuTable();
-  await renderOrdiniKanban();
-  await renderTavoli();
-  return true;
+/* CLIENTE – sempre blu notte (QR esistenti e nuovi) */
+.app-cliente {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  color: #e8eef8;
+  background:
+    radial-gradient(ellipse at 15% 0%, rgba(59,130,246,0.28), transparent 50%),
+    radial-gradient(ellipse at 85% 100%, rgba(30,58,138,0.4), transparent 48%),
+    #0b1220 !important;
+}
+.cliente-header {
+  background: linear-gradient(135deg, #1e3a8a 0%, #1d4ed8 50%, #2563eb 100%) !important;
+  color: #fff !important;
+  padding: 16px 18px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  box-shadow: 0 4px 24px rgba(37, 99, 235, 0.3);
+}
+.cliente-header h1 { font-size: 18px; font-weight: 700; color: #fff; }
+.cliente-header p { font-size: 13px; opacity: .92; color: #e0eaff; }
+.cart-btn {
+  border-radius: 40px;
+  padding: 9px 16px;
+  background: rgba(0,0,0,0.22);
+  color: white;
+  border: 1px solid rgba(255,255,255,0.28);
+}
+.cart-btn:hover { background: rgba(0,0,0,0.35); }
+#cart-count {
+  background: #fff;
+  color: #1d4ed8;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 10px;
+  margin-left: 3px;
+}
+.cliente-content {
+  flex: 1;
+  padding: 18px;
+  max-width: 600px;
+  margin: 0 auto;
+  width: 100%;
+}
+.app-cliente .menu-item-card,
+.app-cliente .ricevuta-card,
+.app-cliente .carrello-item {
+  background: rgba(18, 26, 43, 0.88) !important;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(96, 165, 250, 0.18) !important;
+  color: #e8eef8;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.35);
+}
+.app-cliente .menu-item-info h4 { color: #f1f5ff; }
+.app-cliente .menu-item-info p { color: #8b9bb8; }
+.app-cliente .menu-item-info .prezzo { color: #60a5fa !important; }
+.app-cliente .cat-chip {
+  background: rgba(18, 26, 43, 0.85);
+  border: 1px solid rgba(96, 165, 250, 0.28);
+  color: #e8eef8;
+}
+.app-cliente .cat-chip.active,
+.app-cliente .cat-chip:hover {
+  background: #3b82f6 !important;
+  border-color: #3b82f6 !important;
+  color: #fff !important;
+}
+.app-cliente .qty-btn {
+  background: rgba(30, 42, 68, 0.95);
+  border: 1px solid rgba(96, 165, 250, 0.35);
+  color: #e8eef8;
+}
+.app-cliente .qty-btn:hover {
+  background: #3b82f6;
+  border-color: #3b82f6;
+  color: #fff;
+}
+.app-cliente .payment-opt {
+  background: rgba(18, 26, 43, 0.75);
+  border: 1px solid rgba(96, 165, 250, 0.22);
+  color: #e8eef8;
+}
+.app-cliente .payment-opt:has(input:checked) {
+  border-color: #3b82f6;
+  background: rgba(59, 130, 246, 0.2);
+}
+.app-cliente .btn-primary {
+  background: #3b82f6 !important;
+  color: #fff !important;
+}
+.app-cliente .btn-primary:hover { background: #2563eb !important; }
+.app-cliente .btn-secondary {
+  background: rgba(30, 42, 68, 0.9) !important;
+  color: #e8eef8 !important;
+  border: 1px solid rgba(96, 165, 250, 0.2);
+}
+.app-cliente .btn-back { color: #60a5fa !important; }
+.app-cliente .carrello-totale { color: #e8eef8; border-top-color: rgba(96,165,250,0.25); }
+.app-cliente .ricevuta-header i { color: #34d399 !important; }
+.app-cliente .ricevuta-info,
+.app-cliente .ricevuta-header p { color: #8b9bb8; }
+.app-cliente .ricevuta-items {
+  border-color: rgba(96,165,250,0.2);
+  color: #e8eef8;
+}
+.app-cliente .stato-step { color: #c7d2e8; border-left-color: #1e2a44; }
+.app-cliente .stato-step.active { border-left-color: #3b82f6; }
+.app-cliente .stato-step.done { border-left-color: #34d399; }
+.app-cliente .stato-step.active .dot { background: #3b82f6; }
+.app-cliente .stato-step.done .dot { background: #34d399; }
+.app-cliente .auto-status-hint { color: #8b9bb8; }
+.app-cliente .form-group label { color: #8b9bb8; }
+.app-cliente textarea,
+.app-cliente input[type="text"],
+.app-cliente input[type="number"] {
+  background: rgba(15, 23, 42, 0.8) !important;
+  border-color: rgba(96, 165, 250, 0.25) !important;
+  color: #e8eef8 !important;
+}
+.btn-back {
+  background: none;
+  border: none;
+  color: var(--primary);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 14px;
+  padding: 4px 0;
+  font-family: inherit;
+}
+.btn-back:hover { text-decoration: underline; }
+
+.cliente-categorie {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 10px;
+  margin-bottom: 14px;
+  scrollbar-width: none;
+}
+.cliente-categorie::-webkit-scrollbar { display: none; }
+.cliente-menu-list { display: flex; flex-direction: column; gap: 10px; }
+.menu-item-card {
+  background: var(--card);
+  border-radius: var(--radius);
+  padding: 14px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  box-shadow: var(--shadow);
+  border: 1px solid var(--border);
+}
+.menu-item-info { flex: 1; }
+.menu-item-info h4 { font-size: 14px; margin-bottom: 2px; }
+.menu-item-info p { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+.menu-item-info .prezzo { font-weight: 700; color: var(--primary); font-size: 14px; }
+.menu-item-info .allergeni-tags { font-size: 11px; color: var(--orange); margin-top: 3px; }
+.menu-item-actions { display: flex; align-items: center; gap: 6px; }
+.qty-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 15px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.qty-btn:hover { background: var(--primary); color: white; border-color: var(--primary); }
+.qty-num { font-weight: 700; min-width: 18px; text-align: center; font-size: 13px; }
+
+#carrello-items { display: flex; flex-direction: column; gap: 10px; margin: 14px 0; }
+.carrello-item {
+  background: var(--card);
+  border-radius: 8px;
+  padding: 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  box-shadow: var(--shadow);
+  border: 1px solid var(--border);
+}
+.carrello-totale {
+  display: flex;
+  justify-content: space-between;
+  font-size: 17px;
+  padding: 14px 0;
+  border-top: 2px solid var(--border);
+  margin-top: 6px;
+}
+.payment-options {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+.payment-opt {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  background: var(--bg);
+}
+.payment-opt input { width: auto; accent-color: var(--primary); }
+.payment-opt:has(input:checked) {
+  border-color: var(--primary);
+  background: var(--primary-soft);
 }
 
-async function doLogin(email, pass) {
-  email = (email || '').trim().toLowerCase();
-  pass = (pass || '').trim();
+.ricevuta-card {
+  background: var(--card);
+  border-radius: var(--radius);
+  padding: 24px;
+  box-shadow: var(--shadow);
+  text-align: center;
+  border: 1px solid var(--border);
+}
+.ricevuta-header i { font-size: 42px; color: var(--success); margin-bottom: 6px; }
+.ricevuta-header h2 { margin-bottom: 4px; font-size: 20px; }
+.ricevuta-header p { color: var(--muted); margin-bottom: 14px; font-size: 14px; }
+.ricevuta-info { margin-bottom: 16px; font-size: 13px; color: var(--muted); }
+.ricevuta-items {
+  text-align: left;
+  border-top: 1px dashed var(--border);
+  border-bottom: 1px dashed var(--border);
+  padding: 14px 0;
+  margin-bottom: 14px;
+}
+.ricevuta-items .r-item {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+.ricevuta-totale {
+  display: flex;
+  justify-content: space-between;
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+.stato-timeline { text-align: left; margin-top: 16px; }
+.stato-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  border-left: 3px solid var(--border);
+  padding-left: 14px;
+  margin-left: 6px;
+  font-size: 14px;
+}
+.stato-step.active { border-left-color: var(--primary); }
+.stato-step.done { border-left-color: var(--success); }
+.stato-step .dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--border);
+  flex-shrink: 0;
+}
+.stato-step.active .dot { background: var(--primary); }
+.stato-step.done .dot { background: var(--success); }
 
-  if (!pass) {
-    toast('Inserisci la password');
-    return false;
-  }
+/* IMAGE UPLOAD */
+.img-upload-box { margin-top: 4px; }
+.img-preview-wrap {
+  position: relative;
+  display: inline-block;
+  margin-bottom: 10px;
+}
+.img-preview-wrap img {
+  width: 100px;
+  height: 100px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+.btn-remove-img {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: none;
+  background: var(--danger);
+  color: white;
+  font-size: 14px;
+  cursor: pointer;
+  line-height: 1;
+}
+.img-upload-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.img-upload-actions input[type="url"] {
+  flex: 1;
+  min-width: 160px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  font-family: inherit;
+}
+.file-label { cursor: pointer; margin: 0; }
+.img-or { font-size: 12px; color: var(--muted); }
 
-  // ========== 1) API server-side /api/utenti ==========
-  try {
-    const resp = await fetch('/api/utenti', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'login', email, password: pass })
-    });
-    const json = await resp.json().catch(() => null);
-    if (json && json.ok && json.user) {
-      if (json.user.ruolo === 'admin') {
-        return await enterAsAdmin(json.user.email);
-      }
-      if (json.user.ruolo === 'ristoratore') {
-        // se l'API non manda ristoranteId, cercalo per email
-        if (!json.user.ristoranteId && !json.user.id && sb) {
-          const { data: r } = await sb.from('ristoranti').select('*').eq('email', json.user.email).maybeSingle();
-          if (r) return await enterAsRistoratore(r);
-        }
-        return await enterAsRistoratore(json.user);
-      }
-    }
-  } catch (e) {
-    console.warn('API /api/utenti non disponibile, uso fallback client:', e.message);
-  }
-
-  // ========== 2) Solo account reali (niente login admin con sola password "admin") ==========
-  if (!email) {
-    toast('Inserisci email e password');
-    return false;
-  }
-
-  if (!sb) {
-    toast('Configura config.js (ANON_KEY) oppure le env su Vercel');
-    return false;
-  }
-
-  try {
-    // prima cerca in utenti (ristoratore)
-    const { data: u } = await sb
-      .from('utenti')
-      .select('*')
-      .eq('email', email)
-      .eq('password_hash', pass)
-      .maybeSingle();
-
-    if (u && u.ruolo === 'admin') {
-      return await enterAsAdmin(u.email);
-    }
-
-    if (u && u.ruolo === 'ristoratore') {
-      const { data: r } = await sb.from('ristoranti').select('*').eq('email', email).maybeSingle();
-      if (r) return await enterAsRistoratore(r);
-      toast('Utente trovato ma nessun ristorante collegato a questa email');
-      return false;
-    }
-
-    // poi cerca direttamente in ristoranti (compatibilità)
-    const { data: r, error } = await sb
-      .from('ristoranti')
-      .select('*')
-      .eq('email', email)
-      .eq('password', pass)
-      .maybeSingle();
-
-    if (error) {
-      console.error(error);
-      toast('Errore database: ' + (error.message || 'controlla config.js'));
-      return false;
-    }
-    if (r) return await enterAsRistoratore(r);
-  } catch (e) {
-    console.error(e);
-    toast('Errore di connessione');
-    return false;
-  }
-
-  toast('Credenziali non valide');
-  return false;
+.piatto-img {
+  width: 44px;
+  height: 44px;
+  object-fit: cover;
+  border-radius: 7px;
+  background: var(--bg);
+  flex-shrink: 0;
+}
+.menu-item-card .piatto-img {
+  width: 58px;
+  height: 58px;
+  border-radius: 8px;
 }
 
-$('#login-form').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  await doLogin($('#login-email').value, $('#login-password').value);
-});
-
-// =====================================================
-// LOGOUT
-// =====================================================
-$$('.logout-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    stopOrdineStatusPolling();
-    document.body.classList.remove('cliente-night');
-    currentUser = null;
-    currentRistorante = null;
-    cart = [];
-    lastOrdineId = null;
-    $('#app-admin').classList.add('hidden');
-    $('#app-ristoratore').classList.add('hidden');
-    $('#app-cliente').classList.add('hidden');
-    $('#login-screen').classList.remove('hidden');
-    $('#login-form').reset();
-  });
-});
-
-// =====================================================
-// THEME
-// =====================================================
-$$('.theme-toggle').forEach(btn => {
-  btn.addEventListener('click', () => {
-    const html = document.documentElement;
-    const isLight = html.getAttribute('data-theme') === 'light';
-    // default = blu notte; light = tema chiaro
-    html.setAttribute('data-theme', isLight ? '' : 'light');
-    $$('.theme-toggle i').forEach(i => { i.className = isLight ? 'fas fa-sun' : 'fas fa-moon'; });
-  });
-});
-
-// =====================================================
-// NAV ADMIN
-// =====================================================
-$$('#app-admin .nav-item').forEach(item => {
-  item.addEventListener('click', async (e) => {
-    e.preventDefault();
-    $$('#app-admin .nav-item').forEach(n => n.classList.remove('active'));
-    item.classList.add('active');
-    const page = item.dataset.page;
-    $$('#app-admin .page').forEach(p => p.classList.add('hidden'));
-    $(`#page-${page}`).classList.remove('hidden');
-    const titles = {
-      dashboard: 'Panoramica', ristoranti: 'Ristoranti', abbonamenti: 'Abbonamenti',
-      'miei-incassi': 'I miei incassi', 'incassi-rist': 'Incassi ristoranti', impostazioni: 'Impostazioni'
-    };
-    $('#admin-page-title').textContent = titles[page] || page;
-    if (page === 'dashboard') await renderAdminDashboard();
-    if (page === 'ristoranti') await renderAdminTable();
-    if (page === 'abbonamenti') await renderAbbonamenti();
-    if (page === 'miei-incassi') await renderMieiIncassi();
-    if (page === 'incassi-rist') await populateIncassiSelect();
-  });
-});
-
-// =====================================================
-// NAV RISTORATORE
-// =====================================================
-$$('#app-ristoratore .nav-item').forEach(item => {
-  item.addEventListener('click', async (e) => {
-    e.preventDefault();
-    $$('#app-ristoratore .nav-item').forEach(n => n.classList.remove('active'));
-    item.classList.add('active');
-    const page = item.dataset.page;
-    $$('#app-ristoratore .page').forEach(p => p.classList.add('hidden'));
-    $(`#page-${page}`).classList.remove('hidden');
-    const titles = {
-      'rist-dashboard': 'Panoramica', 'rist-menu': 'Gestione Menu',
-      'rist-ordini': 'Ordini', 'rist-tavoli': 'Tavoli & QR'
-    };
-    $('#rist-page-title').textContent = titles[page] || page;
-    if (page === 'rist-dashboard') await renderRistDashboard();
-    if (page === 'rist-menu') await renderMenuTable();
-    if (page === 'rist-ordini') await renderOrdiniKanban();
-    if (page === 'rist-tavoli') await renderTavoli();
-  });
-});
-
-// =====================================================
-// CLOSE MODALS
-// =====================================================
-$$('.close-modal').forEach(btn => {
-  btn.addEventListener('click', () => {
-    const id = btn.dataset.modal;
-    if (id) $(`#${id}`).classList.add('hidden');
-  });
-});
-
-// =====================================================
-// TOGGLE PASSWORD
-// =====================================================
-$('#toggle-pass')?.addEventListener('click', () => {
-  const inp = $('#password');
-  const icon = $('#toggle-pass i');
-  if (inp.type === 'password') {
-    inp.type = 'text';
-    icon.className = 'fas fa-eye-slash';
-  } else {
-    inp.type = 'password';
-    icon.className = 'fas fa-eye';
-  }
-});
-
-// =====================================================
-// ADMIN – DASHBOARD
-// =====================================================
-async function renderAdminDashboard() {
-  const ristoranti = await loadRistoranti();
-  const attivi = ristoranti.filter(r => !r.scadenza || new Date(r.scadenza) >= new Date()).length;
-  let ricavi = 0;
-  ristoranti.forEach(r => {
-    const p = PIANI[r.id_piano];
-    if (p && (!r.scadenza || new Date(r.scadenza) >= new Date())) ricavi += p.prezzo;
-  });
-  $('#stat-ristoranti').textContent = ristoranti.length;
-  $('#stat-attivi').textContent = attivi;
-  $('#stat-ricavi').textContent = formatPrice(ricavi);
-
-  const recent = ristoranti.slice(0, 5);
-  const list = $('#recent-list');
-  if (!recent.length) {
-    list.innerHTML = '<p style="color:var(--muted)">Nessun ristorante ancora creato.</p>';
-  } else {
-    list.innerHTML = recent.map(r => `
-      <div class="recent-item">
-        <span><strong>${r.nome}</strong> · ${r.citta || '—'}</span>
-        <span class="badge badge-${r.id_piano}">${r.id_piano}</span>
-      </div>
-    `).join('');
-  }
-  renderAdminCharts(ristoranti);
+/* MODAL */
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(7, 13, 24, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 18px;
+}
+.modal-content {
+  background: var(--card);
+  border-radius: 14px;
+  width: 100%;
+  max-width: 540px;
+  max-height: 90vh;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+}
+.modal-content.modal-ordine-detail { max-width: 460px; }
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.modal-header h3 { font-size: 17px; }
+.close-modal {
+  background: none;
+  border: none;
+  font-size: 26px;
+  cursor: pointer;
+  color: var(--muted);
+  line-height: 1;
+  padding: 0 3px;
+}
+.form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  padding: 0 20px;
+  margin-top: 14px;
+}
+.modal-footer {
+  padding: 14px 20px;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  margin-top: 14px;
+}
+.modal-footer .btn {
+  min-width: 0;
+  height: auto;
+  min-height: 40px;
+  padding: 10px 14px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+#ordine-detail-actions {
+  justify-content: flex-start;
+  gap: 8px;
+}
+#ordine-detail-actions .btn {
+  flex: 1 1 auto;
+  max-width: 100%;
+}
+.modal-content.modal-ordine-detail {
+  max-width: 480px;
+}
+.badge-pag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 11px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.badge-stato {
+  white-space: nowrap;
 }
 
-function renderAdminCharts(ristoranti) {
-  if (typeof Chart === 'undefined') return;
-  const mesi = [], vals = [];
-  const now = new Date();
-  for (let i = 5; i >= 0; i--) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    mesi.push(d.toLocaleDateString('it-IT', { month: 'short' }));
-    let v = 0;
-    // semplificato: mostra solo ricavi del mese corrente se non ci sono pagamenti
-    if (i === 0) {
-      ristoranti.forEach(r => {
-        const plan = PIANI[r.id_piano];
-        if (plan && (!r.scadenza || new Date(r.scadenza) >= new Date())) v += plan.prezzo;
-      });
-    }
-    vals.push(v);
-  }
-  const ctx1 = document.getElementById('chart-ricavi-admin');
-  if (ctx1) {
-    if (chartRicaviAdmin) chartRicaviAdmin.destroy();
-    chartRicaviAdmin = new Chart(ctx1, {
-      type: 'bar',
-      data: { labels: mesi, datasets: [{ label: '€', data: vals, backgroundColor: 'rgba(59, 130, 246, 0.75)', borderRadius: 6, borderSkipped: false }] },
-      options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { callback: v => '€' + v } }, x: { grid: { display: false } } } }
-    });
-  }
-  const counts = { base: 0, pro: 0, enterprise: 0 };
-  ristoranti.forEach(r => { if (counts[r.id_piano] !== undefined) counts[r.id_piano]++; });
-  const ctx2 = document.getElementById('chart-piani-admin');
-  if (ctx2) {
-    if (chartPianiAdmin) chartPianiAdmin.destroy();
-    chartPianiAdmin = new Chart(ctx2, {
-      type: 'doughnut',
-      data: { labels: ['Base', 'Pro', 'Enterprise'], datasets: [{ data: [counts.base, counts.pro, counts.enterprise], backgroundColor: ['#64748b', '#3b82f6', '#818cf8'], borderWidth: 0 }] },
-      options: { responsive: true, plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, padding: 12 } } } }
-    });
-  }
+.toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  background: #0f172a;
+  color: #e8eef8;
+  padding: 12px 18px;
+  border-radius: 10px;
+  box-shadow: 0 6px 24px rgba(0,0,0,0.2);
+  z-index: 200;
+  animation: slideIn .25s ease;
+  font-size: 13px;
+}
+@keyframes slideIn {
+  from { transform: translateY(12px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
 }
 
-// =====================================================
-// ADMIN – TABELLA RISTORANTI
-// =====================================================
-async function renderAdminTable(filter = '') {
-  let data = await loadRistoranti();
-  if (filter) {
-    const q = filter.toLowerCase();
-    data = data.filter(r =>
-      r.nome.toLowerCase().includes(q) ||
-      (r.titolare || '').toLowerCase().includes(q) ||
-      (r.citta || '').toLowerCase().includes(q)
-    );
-  }
-  const body = $('#ristoranti-body');
-  if (!data.length) {
-    body.innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:40px">Nessun ristorante trovato</td></tr>`;
-    return;
-  }
-  body.innerHTML = data.map(r => `
-    <tr>
-      <td><strong>${r.nome}</strong></td>
-      <td>${r.titolare || '—'}</td>
-      <td>${r.citta || '—'}</td>
-      <td>${(r.sale || []).length}</td>
-      <td><span class="badge badge-${r.id_piano}">${r.id_piano}</span></td>
-      <td>${r.scadenza || '—'}</td>
-      <td class="actions">
-        <button class="btn btn-secondary btn-sm" onclick="editRistorante('${r.id}')" title="Modifica"><i class="fas fa-edit"></i></button>
-        <button class="btn btn-secondary btn-sm" onclick="apriResetPassword('${r.id}')" title="Nuova password"><i class="fas fa-key"></i></button>
-        <button class="btn btn-secondary btn-sm" onclick="adminApriMenu('${r.id}')" title="Gestisci menu"><i class="fas fa-book-open"></i></button>
-        <button class="btn btn-danger btn-sm" onclick="deleteRistorante('${r.id}')" title="Elimina"><i class="fas fa-trash"></i></button>
-      </td>
-    </tr>
-  `).join('');
+.settings-card {
+  background: var(--card);
+  padding: 24px;
+  border-radius: var(--radius);
+  max-width: 480px;
+  box-shadow: var(--shadow);
+  border: 1px solid var(--border);
+}
+.settings-card p { color: var(--muted); margin: 10px 0 20px; font-size: 14px; }
+
+.scadenza-warn { color: var(--orange); font-weight: 600; }
+.scadenza-ok { color: var(--success); }
+.scadenza-late { color: var(--danger); font-weight: 600; }
+
+@media (max-width: 900px) {
+  .kanban { grid-template-columns: 1fr; height: auto; }
+  .kanban-col { min-height: 180px; }
+}
+@media (max-width: 768px) {
+  .sidebar { width: 66px; }
+  .sidebar-header span, .nav-item span { display: none; }
+  .nav-item { justify-content: center; padding: 12px; }
+  .nav-badge { position: absolute; top: 5px; right: 6px; margin: 0; }
+  .form-row { grid-template-columns: 1fr; }
+  .toolbar { flex-direction: column; align-items: stretch; }
+  .search-box { max-width: none; }
+  .cards { grid-template-columns: 1fr 1fr; }
+  .sidebar-footer .btn { font-size: 10px; padding: 7px; }
 }
 
-$('#search-ristoranti')?.addEventListener('input', e => renderAdminTable(e.target.value));
 
-// Nuovo / Modifica ristorante
-$('#btn-nuovo')?.addEventListener('click', () => {
-  $('#modal-title').textContent = 'Nuovo ristorante';
-  $('#form-ristorante').reset();
-  $('#edit-id').value = '';
-  $('#password').required = true;
-  $('#password').type = 'password';
-  $('#toggle-pass i').className = 'fas fa-eye';
-  const d = new Date();
-  d.setMonth(d.getMonth() + 1);
-  $('#scadenza').value = d.toISOString().slice(0, 10);
-  $('#sale').value = 'Sala principale';
-  $('#n_tavoli').value = 8;
-  $('#modal-ristorante').classList.remove('hidden');
-});
-
-async function createDefaultTavoli(ristoranteId, n) {
-  const count = Math.max(1, parseInt(n) || 8);
-  const rows = [];
-  for (let i = 1; i <= count; i++) {
-    rows.push({
-      id_ristorante: ristoranteId,
-      numero: i,
-      adulti: 4,
-      bambini: 0,
-      sala: 0,
-      occupato: false,
-      forma: 'round'
-    });
-  }
-  if (rows.length) await sb.from('tavoli').insert(rows);
+/* Interactive cards – iOS-like press */
+.cards-interactive .card-tilt {
+  cursor: pointer;
+  position: relative;
+  transition: transform 0.28s cubic-bezier(0.34, 1.4, 0.64, 1), box-shadow 0.25s ease;
+  will-change: transform;
+  overflow: hidden;
+}
+.cards-interactive .card-tilt::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at var(--mx, 50%) var(--my, 50%), rgba(255,255,255,0.22), transparent 55%);
+  opacity: 0;
+  transition: opacity 0.25s;
+  pointer-events: none;
+}
+.cards-interactive .card-tilt:hover {
+  transform: translateY(-4px) scale(1.02);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.35);
+}
+.cards-interactive .card-tilt:hover::after { opacity: 1; }
+.cards-interactive .card-tilt:active {
+  transform: scale(0.96);
+  transition-duration: 0.12s;
+}
+.card-hint {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+  opacity: 0.5;
+  transition: opacity 0.2s, transform 0.2s;
+}
+.cards-interactive .card-tilt:hover .card-hint {
+  opacity: 1;
+  transform: translateX(3px);
+  color: var(--primary);
 }
 
-async function createDefaultCategorie(ristoranteId) {
-  const cats = ['Antipasti', 'Primi', 'Secondi', 'Dolci', 'Bevande'];
-  await sb.from('categorie').insert(cats.map((nome, i) => ({
-    id_ristorante: ristoranteId,
-    nome,
-    posizione: i
-  })));
+/* Charts */
+.charts-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 22px;
+}
+.chart-box {
+  background: var(--card);
+  border-radius: var(--radius);
+  padding: 18px 16px 12px;
+  box-shadow: var(--shadow);
+  border: 1px solid var(--border);
+}
+.chart-box h3 {
+  font-size: 14px;
+  margin-bottom: 10px;
+  font-weight: 700;
+  color: var(--text);
+}
+.chart-box canvas { max-height: 200px; }
+
+/* Payment status badges */
+.badge-pag {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 700;
+}
+.badge-pag.pagato { background: #14532d; color: #86efac; }
+.badge-pag.in_attesa { background: #422006; color: #fbbf24; }
+.badge-pag.non_pagato { background: #7f1d1d; color: #fca5a5; }
+
+.kanban-card .pag-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 6px;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
-async function createDefaultMenu(ristoranteId) {
-  const piatti = [
-    { nome: 'Bruschetta al pomodoro', descrizione: 'Pane tostato, pomodoro fresco, basilico', prezzo: 5.50, categoria: 'Antipasti', allergeni: ['glutine'] },
-    { nome: 'Spaghetti carbonara', descrizione: 'Guanciale, pecorino, uovo', prezzo: 12.00, categoria: 'Primi', allergeni: ['glutine', 'uova', 'latticini'] },
-    { nome: 'Bistecca alla fiorentina', descrizione: 'Manzo, rosmarino, olio EVO', prezzo: 28.00, categoria: 'Secondi', allergeni: [] },
-    { nome: 'Tiramisù', descrizione: 'Mascarpone, caffè, cacao', prezzo: 6.50, categoria: 'Dolci', allergeni: ['latticini', 'uova', 'glutine'] },
-    { nome: 'Acqua naturale 75cl', descrizione: '', prezzo: 2.50, categoria: 'Bevande', allergeni: [] },
-    { nome: 'Vino della casa (calice)', descrizione: '', prezzo: 4.00, categoria: 'Bevande', allergeni: [] }
-  ];
-  await sb.from('piatti').insert(piatti.map(p => ({
-    ...p,
-    id_ristorante: ristoranteId,
-    disponibile: true
-  })));
+@media (max-width: 900px) {
+  .charts-row { grid-template-columns: 1fr; }
 }
 
-$('#form-ristorante')?.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  if (!sb) {
-    toast('Database non collegato: controlla config.js (ANON_KEY)');
-    return;
-  }
-
-  const id = $('#edit-id').value;
-  const saleStr = $('#sale').value.trim() || 'Sala principale';
-  const sale = saleStr.split(',').map(s => s.trim()).filter(Boolean);
-  const nTavoli = parseInt($('#n_tavoli').value) || 8;
-
-  const email = $('#email').value.trim().toLowerCase();
-  const password = $('#password').value;
-  const nomeRist = $('#nome').value.trim();
-  const titolare = $('#titolare').value.trim();
-
-  if (!email) {
-    toast('Email ristoratore obbligatoria');
-    return;
-  }
-
-  const data = {
-    nome: nomeRist,
-    titolare,
-    citta: $('#citta').value.trim(),
-    email,
-    password: password || undefined,
-    id_piano: $('#id_piano').value,
-    scadenza: $('#scadenza').value || null,
-    sale
-  };
-
-  if (id) {
-    // --- MODIFICA ristorante ---
-    if (!data.password) delete data.password;
-    const { error } = await sb.from('ristoranti').update(data).eq('id', id);
-    if (error) {
-      toast('Errore aggiornamento ristorante: ' + error.message);
-      console.error(error);
-      return;
-    }
-
-    // aggiorna/crea anche l'UTENTE ristoratore
-    const utenteUpdate = { nome: titolare || nomeRist, ruolo: 'ristoratore' };
-    if (password) utenteUpdate.password_hash = password;
-
-    const { data: existingUser } = await sb.from('utenti').select('id').eq('email', email).maybeSingle();
-    if (existingUser) {
-      const { error: errU } = await sb.from('utenti').update(utenteUpdate).eq('id', existingUser.id);
-      if (errU) console.error('Errore update utente:', errU);
-    } else if (password) {
-      const { error: errU } = await sb.from('utenti').insert({
-        email,
-        password_hash: password,
-        ruolo: 'ristoratore',
-        nome: titolare || nomeRist
-      });
-      if (errU) console.error('Errore create utente:', errU);
-    }
-    toast('Ristorante e utente aggiornati');
-  } else {
-    // --- NUOVO ristorante + UTENTE ---
-    if (!password) {
-      toast('Password obbligatoria per il ristoratore');
-      return;
-    }
-
-    const { data: inserted, error } = await sb.from('ristoranti').insert({
-      ...data,
-      password
-    }).select().single();
-
-    if (error) {
-      toast('Errore creazione ristorante: ' + error.message);
-      console.error(error);
-      return;
-    }
-
-    // crea l'UTENTE ristoratore (email + password + nome)
-    const { error: errUser } = await sb.from('utenti').insert({
-      email,
-      password_hash: password,
-      ruolo: 'ristoratore',
-      nome: titolare || nomeRist
-    });
-
-    if (errUser) {
-      console.error('Errore creazione utente:', errUser);
-      toast('Ristorante creato, ma utente non salvato: ' + errUser.message);
-    } else {
-      toast('Ristorante e utente ristoratore creati');
-    }
-
-    await createDefaultTavoli(inserted.id, nTavoli);
-    await createDefaultCategorie(inserted.id);
-    await createDefaultMenu(inserted.id);
-  }
-
-  $('#modal-ristorante').classList.add('hidden');
-  await renderAdminTable($('#search-ristoranti')?.value || '');
-  await renderAdminDashboard();
-  await renderAbbonamenti();
-});
-
-window.editRistorante = async function(id) {
-  const { data: r } = await sb.from('ristoranti').select('*').eq('id', id).single();
-  if (!r) return;
-  $('#modal-title').textContent = 'Modifica ristorante';
-  $('#edit-id').value = r.id;
-  $('#nome').value = r.nome;
-  $('#titolare').value = r.titolare || '';
-  $('#citta').value = r.citta || '';
-  $('#email').value = r.email;
-  $('#password').value = '';
-  $('#password').type = 'password';
-  $('#password').required = false;
-  $('#toggle-pass i').className = 'fas fa-eye';
-  $('#id_piano').value = r.id_piano;
-  $('#scadenza').value = r.scadenza || '';
-  $('#sale').value = (r.sale || []).join(', ');
-  const { count } = await sb.from('tavoli').select('*', { count: 'exact', head: true }).eq('id_ristorante', id);
-  $('#n_tavoli').value = count || 8;
-  $('#modal-ristorante').classList.remove('hidden');
-};
-
-window.deleteRistorante = async function(id) {
-  if (!confirm('Eliminare questo ristorante?')) return;
-  const { error } = await sb.from('ristoranti').delete().eq('id', id);
-  if (error) { toast('Errore eliminazione'); return; }
-  await renderAdminTable($('#search-ristoranti')?.value || '');
-  await renderAdminDashboard();
-  await renderAbbonamenti();
-  toast('Ristorante eliminato');
-};
-
-window.adminApriMenu = async function(id) {
-  const r = await loadRistoranteFull(id);
-  if (!r) return;
-  currentRistorante = r;
-  currentUser = { role: 'ristoratore', email: r.email, ristoranteId: r.id, fromAdmin: true };
-  $('#app-admin').classList.add('hidden');
-  $('#app-ristoratore').classList.remove('hidden');
-  $('#rist-nome-sidebar').textContent = r.nome + ' (admin)';
-  $('#rist-user-email').textContent = 'Gestione menu';
-  $$('#app-ristoratore .nav-item').forEach(n => n.classList.remove('active'));
-  $$('#app-ristoratore .page').forEach(p => p.classList.add('hidden'));
-  const menuNav = $$('#app-ristoratore .nav-item')[1];
-  if (menuNav) menuNav.classList.add('active');
-  $('#page-rist-menu').classList.remove('hidden');
-  $('#rist-page-title').textContent = 'Gestione Menu';
-  await renderMenuTable();
-};
-
-// =====================================================
-// ABBONAMENTI
-// =====================================================
-async function renderAbbonamenti() {
-  const ristoranti = await loadRistoranti();
-  const body = $('#abbonamenti-body');
-  if (!ristoranti.length) {
-    body.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:30px">Nessun abbonamento</td></tr>`;
-    return;
-  }
-  body.innerHTML = ristoranti.map(r => {
-    const scad = r.scadenza ? new Date(r.scadenza) : null;
-    const oggi = new Date();
-    oggi.setHours(0,0,0,0);
-    let statoLabel = 'Senza data';
-    let statoClass = 'badge-base';
-    let scadClass = '';
-    let scadText = '—';
-    if (scad) {
-      scadText = scad.toLocaleDateString('it-IT', { day: '2-digit', month: 'long', year: 'numeric' });
-      if (scad < oggi) {
-        statoLabel = 'Scaduto';
-        scadClass = 'scadenza-late';
-      } else {
-        const diff = Math.ceil((scad - oggi) / (1000*60*60*24));
-        if (diff <= 7) {
-          statoLabel = 'In scadenza';
-          scadClass = 'scadenza-warn';
-        } else {
-          statoLabel = 'Attivo';
-          statoClass = 'badge-pro';
-          scadClass = 'scadenza-ok';
-        }
-      }
-    }
-    return `
-      <tr>
-        <td><strong>${r.nome}</strong></td>
-        <td><span class="badge badge-${r.id_piano}">${r.id_piano}</span></td>
-        <td class="${scadClass}">${scadText}</td>
-        <td><span class="badge ${statoClass}">${statoLabel}</span></td>
-        <td>
-          <button class="btn btn-primary btn-sm" onclick="estendiAbbonamento('${r.id}')">
-            <i class="fas fa-plus"></i> +1 mese
-          </button>
-        </td>
-      </tr>
-    `;
-  }).join('');
+/* QR entry: nasconde login prima del render JS */
+html.qr-entry #login-screen { display: none !important; }
+html.qr-entry #app-cliente { display: flex !important; }
+html.qr-entry body,
+html.qr-entry {
+  background: #0b1220;
 }
 
-window.estendiAbbonamento = async function(id) {
-  const { data: r } = await sb.from('ristoranti').select('*').eq('id', id).single();
-  if (!r) return;
-  let d = r.scadenza ? new Date(r.scadenza) : new Date();
-  if (d < new Date()) d = new Date();
-  d.setMonth(d.getMonth() + 1);
-  const nuovaScad = d.toISOString().slice(0, 10);
-  await sb.from('ristoranti').update({ scadenza: nuovaScad }).eq('id', id);
-  const prezzo = PIANI[r.id_piano]?.prezzo || 0;
-  await sb.from('pagamenti_abbonamento').insert({
-    id_ristorante: id,
-    importo: prezzo,
-    piano: r.id_piano,
-    tipo: 'rinnovo'
-  });
-  await renderAbbonamenti();
-  await renderAdminDashboard();
-  await renderMieiIncassi();
-  toast('Rinnovato fino al ' + new Date(nuovaScad).toLocaleDateString('it-IT', { day: '2-digit', month: 'long', year: 'numeric' }) + ' (+' + formatPrice(prezzo) + ')');
-};
-
-// =====================================================
-// MIEI INCASSI
-// =====================================================
-async function renderMieiIncassi() {
-  const ristoranti = await loadRistoranti();
-  let totale = 0, mese = 0, inAttesa = 0;
-  const now = new Date();
-  const pagamenti = [];
-
-  for (const r of ristoranti) {
-    const { data: pags } = await sb.from('pagamenti_abbonamento').select('*').eq('id_ristorante', r.id);
-    (pags || []).forEach(p => {
-      totale += Number(p.importo);
-      const pd = new Date(p.data);
-      if (pd.getMonth() === now.getMonth() && pd.getFullYear() === now.getFullYear()) mese += Number(p.importo);
-      pagamenti.push({ ...p, ristorante: r.nome });
-    });
-    if (r.scadenza) {
-      const scad = new Date(r.scadenza);
-      const diff = (scad - now) / (1000 * 60 * 60 * 24);
-      if (diff >= 0 && diff <= 7) inAttesa += PIANI[r.id_piano]?.prezzo || 0;
-    }
-  }
-
-  $('#incassi-totale').textContent = formatPrice(totale);
-  $('#incassi-mese').textContent = formatPrice(mese);
-  $('#incassi-in-attesa').textContent = formatPrice(inAttesa);
-
-  const scadenze = ristoranti
-    .filter(r => r.scadenza)
-    .map(r => ({ nome: r.nome, scadenza: r.scadenza, piano: r.id_piano }))
-    .sort((a, b) => new Date(a.scadenza) - new Date(b.scadenza));
-
-  pagamenti.sort((a, b) => new Date(b.data) - new Date(a.data));
-  const list = $('#pagamenti-list');
-  let html = '';
-  if (scadenze.length) {
-    html += '<h4 style="margin:0 0 10px;font-size:14px;color:var(--muted)">Prossime scadenze abbonamento</h4>';
-    html += scadenze.map(s => {
-      const d = new Date(s.scadenza);
-      const oggi = new Date(); oggi.setHours(0,0,0,0);
-      const late = d < oggi;
-      const warn = !late && (d - oggi) / (1000*60*60*24) <= 7;
-      const cls = late ? 'scadenza-late' : (warn ? 'scadenza-warn' : 'scadenza-ok');
-      const label = d.toLocaleDateString('it-IT', { day: '2-digit', month: 'long', year: 'numeric' });
-      return `<div class="recent-item">
-        <span><strong>${s.nome}</strong> · ${s.piano}</span>
-        <span class="${cls}">scade il ${label}</span>
-      </div>`;
-    }).join('');
-    html += '<h4 style="margin:18px 0 10px;font-size:14px;color:var(--muted)">Pagamenti ricevuti</h4>';
-  }
-  if (!pagamenti.length) {
-    html += '<p style="color:var(--muted)">Nessun pagamento ricevuto ancora.</p>';
-  } else {
-    html += pagamenti.slice(0, 20).map(p => `
-      <div class="recent-item">
-        <span><strong>${p.ristorante}</strong> · ${p.tipo} (${p.piano})</span>
-        <span>${formatPrice(p.importo)} · ${formatTime(p.data)}</span>
-      </div>
-    `).join('');
-  }
-  list.innerHTML = html;
+/* QR modal centrato */
+.qr-modal-body {
+  padding: 28px 24px 32px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+.qrcode-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: #fff;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+}
+.qrcode-container img,
+.qrcode-container canvas {
+  display: block;
+  margin: 0 auto;
+}
+.qr-info-text {
+  margin-top: 16px;
+  color: var(--muted);
+  font-size: 14px;
 }
 
-// =====================================================
-// INCASSI RISTORANTI
-// =====================================================
-async function populateIncassiSelect() {
-  const ristoranti = await loadRistoranti();
-  const sel = $('#select-rist-incassi');
-  sel.innerHTML = '<option value="">— Seleziona —</option>' +
-    ristoranti.map(r => `<option value="${r.id}">${r.nome}</option>`).join('');
+/* Tavoli QR mini centrati */
+.tavolo-card .qr-mini {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin: 10px auto 12px;
+  min-height: 110px;
+}
+.tavolo-card .qr-mini img,
+.tavolo-card .qr-mini canvas {
+  display: block;
+  margin: 0 auto;
 }
 
-$('#select-rist-incassi')?.addEventListener('change', async () => {
-  const id = $('#select-rist-incassi').value;
-  const cont = $('#incassi-rist-content');
-  if (!id) {
-    cont.innerHTML = '<p style="color:var(--muted)">Seleziona un ristorante per vedere i dettagli.</p>';
-    return;
-  }
-  const r = await loadRistoranteFull(id);
-  if (!r) return;
+/* cliente-night: alias (stili principali su .app-cliente) */
+body.cliente-night { color-scheme: dark; }
 
-  const ordini = r.ordini || [];
-  const totale = ordini.reduce((s, o) => s + (Number(o.totale) || 0), 0);
-  const oggi = ordini.filter(o => new Date(o.createdAt).toDateString() === new Date().toDateString())
-    .reduce((s, o) => s + Number(o.totale), 0);
 
-  const counts = {};
-  ordini.forEach(o => {
-    (o.items || []).forEach(i => {
-      counts[i.nome] = (counts[i.nome] || 0) + i.qty;
-    });
-  });
-  let topPiatto = '—', topQty = 0;
-  Object.entries(counts).forEach(([nome, qty]) => {
-    if (qty > topQty) { topPiatto = nome; topQty = qty; }
-  });
-
-  cont.innerHTML = `
-    <div class="cards">
-      <div class="card">
-        <div class="card-icon green"><i class="fas fa-euro-sign"></i></div>
-        <div><h3>${formatPrice(totale)}</h3><p>Incasso totale</p></div>
-      </div>
-      <div class="card">
-        <div class="card-icon blue"><i class="fas fa-calendar-day"></i></div>
-        <div><h3>${formatPrice(oggi)}</h3><p>Incasso oggi</p></div>
-      </div>
-      <div class="card">
-        <div class="card-icon orange"><i class="fas fa-utensils"></i></div>
-        <div><h3>${topPiatto}</h3><p>Piatto più venduto (${topQty}x)</p></div>
-      </div>
-      <div class="card">
-        <div class="card-icon purple"><i class="fas fa-receipt"></i></div>
-        <div><h3>${ordini.length}</h3><p>Ordini totali</p></div>
-      </div>
-    </div>
-    <div class="recent-box">
-      <h3>Ultimi ordini di ${r.nome}</h3>
-      <div class="recent-list">
-        ${ordini.length === 0 ? '<p style="color:var(--muted)">Nessun ordine.</p>' :
-          ordini.slice(0, 10).map(o => `
-            <div class="recent-item">
-              <span>Tavolo ${o.tavolo} · ${formatPrice(o.totale)}</span>
-              <span class="badge-stato ${o.stato}">${labelStato(o.stato)}</span>
-            </div>
-          `).join('')}
-      </div>
-    </div>
-  `;
-});
-
-// RESET
-$('#btn-reset')?.addEventListener('click', async () => {
-  if (!confirm('Cancellare TUTTI i dati? Questa operazione non si può annullare.')) return;
-  await sb.from('pagamenti_abbonamento').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-  await sb.from('ordini').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-  await sb.from('piatti').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-  await sb.from('categorie').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-  await sb.from('tavoli').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-  await sb.from('ristoranti').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-  await renderAdminTable();
-  await renderAdminDashboard();
-  await renderAbbonamenti();
-  await renderMieiIncassi();
-  toast('Dati cancellati');
-});
-
-// DEMO UTENTE
-$('#btn-demo-utente')?.addEventListener('click', async () => {
-  const ristoranti = await loadRistoranti();
-  if (!ristoranti.length) { toast('Crea prima un ristorante'); return; }
-  const sel = $('#demo-ristorante');
-  sel.innerHTML = ristoranti.map(r => `<option value="${r.id}">${r.nome}</option>`).join('');
-  $('#modal-demo-utente').classList.remove('hidden');
-});
-
-$('#btn-avvia-demo')?.addEventListener('click', async () => {
-  const ristId = $('#demo-ristorante').value;
-  const tavolo = parseInt($('#demo-tavolo').value) || 1;
-  const r = await loadRistoranteFull(ristId);
-  if (!r) return;
-  currentUser = { role: 'cliente', ristoranteId: ristId, tavolo };
-  currentRistorante = r;
-  cart = [];
-  lastOrdineId = null;
-  $('#modal-demo-utente').classList.add('hidden');
-  $('#app-admin').classList.add('hidden');
-  $('#app-cliente').classList.remove('hidden');
-  $('#cliente-rist-nome').textContent = r.nome;
-  $('#cliente-tavolo-num').textContent = tavolo;
-  document.body.classList.add('cliente-night');
-  showClienteView('menu');
-  renderClienteMenu();
-});
-
-// =====================================================
-// RISTORATORE
-// =====================================================
-function labelStato(s) {
-  return { nuovo: 'Nuovo', in_preparazione: 'In preparazione', pronto: 'Pronto', consegnato: 'Consegnato', chiuso: 'Chiuso' }[s] || s;
+/* ========== Sfondi sfocati panoramica (come login) ========== */
+#app-admin .main,
+#app-ristoratore .main {
+  background:
+    radial-gradient(ellipse at 10% 0%, rgba(59,130,246,0.18), transparent 45%),
+    radial-gradient(ellipse at 90% 80%, rgba(30,58,138,0.22), transparent 40%),
+    var(--bg);
 }
-function labelPagamentoStato(s) {
-  return { pagato: 'Pagato', in_attesa: 'In attesa', non_pagato: 'Non pagato' }[s] || s || 'In attesa';
+#app-admin .page,
+#app-ristoratore .page {
+  position: relative;
 }
-function defaultPagStato(metodo) {
-  return metodo === 'carta' ? 'pagato' : 'in_attesa';
+#app-admin .card,
+#app-ristoratore .card,
+#app-admin .recent-box,
+#app-ristoratore .recent-box,
+#app-admin .table-wrapper,
+#app-ristoratore .table-wrapper,
+#app-admin .chart-box,
+#app-ristoratore .chart-box,
+#app-admin .plan-card,
+#app-ristoratore .kanban-col,
+#app-ristoratore .piantina,
+#app-ristoratore .tavolo-card,
+#app-admin .settings-card,
+#app-admin .topbar,
+#app-ristoratore .topbar {
+  background: rgba(18, 26, 43, 0.75);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+[data-theme="light"] #app-admin .card,
+[data-theme="light"] #app-ristoratore .card,
+[data-theme="light"] #app-admin .recent-box,
+[data-theme="light"] #app-ristoratore .recent-box,
+[data-theme="light"] #app-admin .table-wrapper,
+[data-theme="light"] #app-ristoratore .table-wrapper,
+[data-theme="light"] #app-admin .chart-box,
+[data-theme="light"] #app-ristoratore .chart-box,
+[data-theme="light"] #app-admin .plan-card,
+[data-theme="light"] #app-ristoratore .kanban-col,
+[data-theme="light"] #app-ristoratore .piantina,
+[data-theme="light"] #app-ristoratore .tavolo-card,
+[data-theme="light"] #app-admin .settings-card,
+[data-theme="light"] #app-admin .topbar,
+[data-theme="light"] #app-ristoratore .topbar {
+  background: rgba(255, 255, 255, 0.88);
 }
 
-function inPeriod(iso, period) {
-  const d = new Date(iso);
-  const now = new Date();
-  if (period === 'oggi') return d.toDateString() === now.toDateString();
-  if (period === 'settimana') {
-    const weekAgo = new Date(now);
-    weekAgo.setDate(weekAgo.getDate() - 7);
-    return d >= weekAgo;
-  }
-  if (period === 'mese') {
-    return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
-  }
-  return true;
+.auto-status-hint {
+  text-align: center;
+  opacity: 0.85;
 }
 
-$$('.period-btn').forEach(btn => {
-  btn.addEventListener('click', async () => {
-    $$('.period-btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    currentPeriod = btn.dataset.period;
-    await renderRistDashboard();
-  });
-});
 
-async function renderRistDashboard() {
-  if (!currentRistorante) return;
-  currentRistorante = await loadRistoranteFull(currentRistorante.id);
-  const menu = currentRistorante.menu || [];
-  const ordini = currentRistorante.ordini || [];
-  const tavoli = currentRistorante.tavoli || [];
-
-  const attivi = ordini.filter(o => o.stato !== 'consegnato' && o.stato !== 'chiuso').length;
-  const occupati = tavoli.filter(t => t.occupato).length ||
-    new Set(ordini.filter(o => o.stato !== 'consegnato' && o.stato !== 'chiuso').map(o => o.tavolo)).size;
-  const incasso = ordini.filter(o => inPeriod(o.createdAt, currentPeriod))
-    .reduce((s, o) => s + Number(o.totale), 0);
-
-  $('#rist-stat-piatti').textContent = menu.length;
-  $('#rist-stat-tavoli-occ').textContent = occupati;
-  $('#rist-stat-ordini-attivi').textContent = attivi;
-  $('#rist-stat-incasso').textContent = formatPrice(incasso);
-
-  const badge = $('#badge-ordini');
-  const nuovi = ordini.filter(o => o.stato === 'nuovo').length;
-  if (nuovi > 0) { badge.textContent = nuovi; badge.classList.remove('hidden'); }
-  else badge.classList.add('hidden');
-
-  const recent = ordini.slice(0, 5);
-  const list = $('#rist-recent-ordini');
-  if (!recent.length) {
-    list.innerHTML = '<p style="color:var(--muted)">Nessun ordine ancora.</p>';
-  } else {
-    list.innerHTML = recent.map(o => {
-      const ps = o.stato_pagamento || defaultPagStato(o.pagamento);
-      return `<div class="recent-item">
-        <span><strong>Tavolo ${o.tavolo}</strong> · ${formatPrice(o.totale)} · ${formatTime(o.createdAt)}</span>
-        <span>
-          <span class="badge-stato ${o.stato}">${labelStato(o.stato)}</span>
-          <span class="badge-pag ${ps}">${labelPagamentoStato(ps)}</span>
-        </span>
-      </div>`;
-    }).join('');
-  }
-  renderRistCharts();
+/* Animazione bottoni (come card panoramica) */
+.btn,
+.qty-btn,
+.cat-chip,
+.period-btn,
+.sale-tab,
+.cart-btn,
+.btn-back,
+.btn-icon,
+.nav-item {
+  transition: transform 0.22s cubic-bezier(0.34, 1.4, 0.64, 1),
+              box-shadow 0.2s ease,
+              background 0.15s ease,
+              border-color 0.15s ease,
+              opacity 0.15s ease;
+  will-change: transform;
+}
+.btn:hover:not(:disabled),
+.qty-btn:hover,
+.cat-chip:hover,
+.period-btn:hover,
+.sale-tab:hover,
+.cart-btn:hover {
+  transform: translateY(-2px) scale(1.03);
+  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.22);
+}
+.btn:active:not(:disabled),
+.qty-btn:active,
+.cat-chip:active,
+.period-btn:active,
+.sale-tab:active,
+.cart-btn:active,
+.btn-icon:active,
+.nav-item:active {
+  transform: scale(0.95);
+  transition-duration: 0.1s;
+}
+.btn-primary:hover:not(:disabled) {
+  box-shadow: 0 8px 20px rgba(59, 130, 246, 0.4);
+}
+.btn-danger:hover:not(:disabled) {
+  box-shadow: 0 8px 18px rgba(248, 113, 113, 0.3);
 }
 
-function renderRistCharts() {
-  if (typeof Chart === 'undefined' || !currentRistorante) return;
-  const ordini = (currentRistorante.ordini || []).filter(o => inPeriod(o.createdAt, currentPeriod));
-  // chart semplificato
-  const ctx1 = document.getElementById('chart-incassi-rist');
-  if (ctx1) {
-    if (chartIncassiRist) chartIncassiRist.destroy();
-    const labels = ['Incasso'];
-    const data = [ordini.reduce((s, o) => s + Number(o.totale), 0)];
-    chartIncassiRist = new Chart(ctx1, {
-      type: 'bar',
-      data: { labels, datasets: [{ label: '€', data, backgroundColor: 'rgba(59, 130, 246, 0.75)', borderRadius: 6 }] },
-      options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } }
-    });
-  }
-  const stati = { nuovo: 0, in_preparazione: 0, pronto: 0, consegnato: 0 };
-  ordini.forEach(o => { if (stati[o.stato] !== undefined) stati[o.stato]++; });
-  const ctx2 = document.getElementById('chart-stati-rist');
-  if (ctx2) {
-    if (chartStatiRist) chartStatiRist.destroy();
-    chartStatiRist = new Chart(ctx2, {
-      type: 'doughnut',
-      data: {
-        labels: ['Nuovo', 'In prep.', 'Pronto', 'Consegnato'],
-        datasets: [{ data: [stati.nuovo, stati.in_preparazione, stati.pronto, stati.consegnato], backgroundColor: ['#d4890f', '#3d6b8c', '#3d7a5a', '#7a6f62'], borderWidth: 0 }]
-      },
-      options: { responsive: true, plugins: { legend: { position: 'bottom', labels: { boxWidth: 12 } } } }
-    });
-  }
+.prep-list .prep-line {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 8px 0;
+  border-bottom: 1px dashed var(--border);
+  font-size: 15px;
 }
-
-// =====================================================
-// MENU
-// =====================================================
-async function renderMenuTable(filter = '') {
-  if (!currentRistorante) return;
-  currentRistorante = await loadRistoranteFull(currentRistorante.id);
-  let menu = currentRistorante.menu || [];
-
-  // chips categorie
-  const chips = $('#categorie-chips');
-  if (chips) {
-    const cats = ['tutti', ...(currentRistorante.categorie || [])];
-    chips.innerHTML = cats.map(c =>
-      `<button class="cat-chip ${c === menuFilterCat ? 'active' : ''}" data-cat="${c}">${c === 'tutti' ? 'Tutti' : c}</button>`
-    ).join('');
-    chips.querySelectorAll('.cat-chip').forEach(chip => {
-      chip.addEventListener('click', () => {
-        menuFilterCat = chip.dataset.cat;
-        renderMenuTable(filter);
-      });
-    });
-  }
-
-  if (menuFilterCat !== 'tutti') menu = menu.filter(p => p.categoria === menuFilterCat);
-  if (filter) {
-    const q = filter.toLowerCase();
-    menu = menu.filter(p => p.nome.toLowerCase().includes(q));
-  }
-
-  const sel = $('#piatto-categoria');
-  if (sel) {
-    sel.innerHTML = (currentRistorante.categorie || []).map(c =>
-      `<option value="${c}">${c}</option>`
-    ).join('');
-  }
-
-  const body = $('#menu-body');
-  if (!menu.length) {
-    body.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:40px">Nessun piatto. Aggiungine uno!</td></tr>`;
-    return;
-  }
-  body.innerHTML = menu.map(p => `
-    <tr>
-      <td>
-        <div style="display:flex;align-items:center;gap:10px">
-          ${p.immagine ? `<img src="${p.immagine}" class="piatto-img" alt="" onerror="this.style.display='none'"/>` : ''}
-          <div>
-            <strong>${p.nome}</strong>
-            ${p.descrizione ? `<br><small style="color:var(--muted)">${p.descrizione}</small>` : ''}
-          </div>
-        </div>
-      </td>
-      <td>${p.categoria || '—'}</td>
-      <td>${formatPrice(p.prezzo)}</td>
-      <td style="font-size:12px">${(p.allergeni || []).join(', ') || '—'}</td>
-      <td><span class="badge ${p.disponibile ? 'badge-pro' : 'badge-base'}">${p.disponibile ? 'Sì' : 'No'}</span></td>
-      <td class="actions">
-        <button class="btn btn-secondary btn-sm" onclick="editPiatto('${p.id}')"><i class="fas fa-edit"></i></button>
-        <button class="btn btn-danger btn-sm" onclick="deletePiatto('${p.id}')"><i class="fas fa-trash"></i></button>
-      </td>
-    </tr>
-  `).join('');
+.prep-list .prep-line:last-child { border-bottom: none; }
+.prep-qty {
+  font-weight: 800;
+  color: var(--primary);
+  min-width: 2.2em;
 }
-
-$('#search-menu')?.addEventListener('input', e => renderMenuTable(e.target.value));
-
-function resetPiattoImage() {
-  const prev = $('#piatto-preview');
-  const wrap = $('#piatto-preview-wrap');
-  const file = $('#piatto-file');
-  if (prev) prev.src = '';
-  if (wrap) wrap.classList.add('hidden');
-  if (file) file.value = '';
-  if ($('#piatto-immagine')) $('#piatto-immagine').value = '';
+.prep-name { font-weight: 600; }
+.kanban-items {
+  line-height: 1.45;
+  margin-top: 4px !important;
 }
-
-function showPiattoPreview(src) {
-  const prev = $('#piatto-preview');
-  const wrap = $('#piatto-preview-wrap');
-  if (!prev || !wrap) return;
-  if (src) {
-    prev.src = src;
-    wrap.classList.remove('hidden');
-  } else {
-    resetPiattoImage();
-  }
+#select-ordini-cliente {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 14px;
 }
-
-$('#piatto-file')?.addEventListener('change', (e) => {
-  const file = e.target.files?.[0];
-  if (!file) return;
-  if (file.size > 1.5 * 1024 * 1024) {
-    toast('Immagine troppo grande (max 1.5 MB)');
-    e.target.value = '';
-    return;
-  }
-  const reader = new FileReader();
-  reader.onload = () => {
-    showPiattoPreview(reader.result);
-    if ($('#piatto-immagine')) $('#piatto-immagine').value = '';
-  };
-  reader.readAsDataURL(file);
-});
-
-$('#piatto-immagine')?.addEventListener('input', (e) => {
-  const url = e.target.value.trim();
-  if (url) showPiattoPreview(url);
-  else if (!$('#piatto-file')?.files?.length) resetPiattoImage();
-});
-
-$('#btn-rimuovi-img')?.addEventListener('click', () => resetPiattoImage());
-
-$('#btn-nuovo-piatto')?.addEventListener('click', () => {
-  $('#modal-piatto-title').textContent = 'Nuovo piatto';
-  $('#form-piatto').reset();
-  $('#piatto-edit-id').value = '';
-  $('#piatto-disponibile').checked = true;
-  resetPiattoImage();
-  const sel = $('#piatto-categoria');
-  sel.innerHTML = (currentRistorante.categorie || []).map(c => `<option value="${c}">${c}</option>`).join('');
-  $$('#allergeni-grid input').forEach(c => c.checked = false);
-  $('#modal-piatto').classList.remove('hidden');
-});
-
-$('#btn-nuova-categoria')?.addEventListener('click', () => {
-  $('#form-categoria').reset();
-  $('#modal-categoria').classList.remove('hidden');
-});
-
-$('#form-categoria')?.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const nome = $('#cat-nome').value.trim();
-  if (!nome || !currentRistorante) return;
-  if (!(currentRistorante.categorie || []).includes(nome)) {
-    await sb.from('categorie').insert({
-      id_ristorante: currentRistorante.id,
-      nome,
-      posizione: (currentRistorante.categorie || []).length
-    });
-    toast('Categoria creata');
-  }
-  $('#modal-categoria').classList.add('hidden');
-  await renderMenuTable();
-});
-
-$('#form-piatto')?.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  if (!currentRistorante) return;
-  const id = $('#piatto-edit-id').value;
-  const allergeni = [...$$('#allergeni-grid input:checked')].map(c => c.value);
-  let immagine = ($('#piatto-immagine')?.value || '').trim();
-  const previewSrc = $('#piatto-preview')?.src || '';
-  if (!immagine && previewSrc && previewSrc.startsWith('data:')) immagine = previewSrc;
-  else if (!immagine && previewSrc && !$('#piatto-preview-wrap')?.classList.contains('hidden')) immagine = previewSrc;
-
-  const data = {
-    id_ristorante: currentRistorante.id,
-    nome: $('#piatto-nome').value.trim(),
-    descrizione: $('#piatto-desc').value.trim(),
-    categoria: $('#piatto-categoria').value,
-    prezzo: parseFloat($('#piatto-prezzo').value) || 0,
-    disponibile: $('#piatto-disponibile').checked,
-    allergeni,
-    immagine
-  };
-
-  if (id) {
-    const { error } = await sb.from('piatti').update(data).eq('id', id);
-    if (error) { toast('Errore'); console.error(error); return; }
-    toast('Piatto aggiornato');
-  } else {
-    const { error } = await sb.from('piatti').insert(data);
-    if (error) { toast('Errore'); console.error(error); return; }
-    toast('Piatto aggiunto');
-  }
-  $('#modal-piatto').classList.add('hidden');
-  await renderMenuTable($('#search-menu')?.value || '');
-  await renderRistDashboard();
-});
-
-window.editPiatto = async function(id) {
-  const p = currentRistorante.menu.find(x => x.id === id);
-  if (!p) return;
-  $('#modal-piatto-title').textContent = 'Modifica piatto';
-  $('#piatto-edit-id').value = p.id;
-  $('#piatto-nome').value = p.nome;
-  $('#piatto-desc').value = p.descrizione || '';
-  const sel = $('#piatto-categoria');
-  sel.innerHTML = (currentRistorante.categorie || []).map(c =>
-    `<option value="${c}" ${c === p.categoria ? 'selected' : ''}>${c}</option>`
-  ).join('');
-  $('#piatto-prezzo').value = p.prezzo;
-  $('#piatto-disponibile').checked = p.disponibile !== false;
-  if ($('#piatto-immagine')) $('#piatto-immagine').value = (p.immagine && !p.immagine.startsWith('data:')) ? p.immagine : '';
-  if (p.immagine) showPiattoPreview(p.immagine);
-  else resetPiattoImage();
-  $$('#allergeni-grid input').forEach(c => {
-    c.checked = (p.allergeni || []).includes(c.value);
-  });
-  $('#modal-piatto').classList.remove('hidden');
-};
-
-window.deletePiatto = async function(id) {
-  if (!confirm('Eliminare questo piatto?')) return;
-  await sb.from('piatti').delete().eq('id', id);
-  await renderMenuTable($('#search-menu')?.value || '');
-  await renderRistDashboard();
-  toast('Piatto eliminato');
-};
-
-// =====================================================
-// ORDINI KANBAN
-// =====================================================
-async function renderOrdiniKanban() {
-  if (!currentRistorante) return;
-  currentRistorante = await loadRistoranteFull(currentRistorante.id);
-  const ordini = currentRistorante.ordini || [];
-
-  const nuovi = ordini.filter(o => o.stato === 'nuovo');
-  const prep = ordini.filter(o => o.stato === 'in_preparazione');
-  const pronti = ordini.filter(o => o.stato === 'pronto' || o.stato === 'consegnato');
-
-  $('#count-nuovo').textContent = nuovi.length;
-  $('#count-prep').textContent = prep.length;
-  $('#count-pronto').textContent = pronti.length;
-
-  function cardHtml(o) {
-    const items = (o.items || []).slice(0, 3).map(i => `${i.qty}× ${i.nome}`).join(', ');
-    const more = (o.items || []).length > 3 ? '...' : '';
-    const ps = o.stato_pagamento || defaultPagStato(o.pagamento);
-    return `
-      <div class="kanban-card stato-${o.stato}" onclick="apriDettaglioOrdine('${o.id}')">
-        <h4>Tavolo ${o.tavolo} · ${formatPrice(o.totale)}</h4>
-        <p>${items}${more}</p>
-        <div class="pag-row">
-          <span style="font-size:11px;color:var(--muted)">${formatTime(o.createdAt)} · #${o.codice}</span>
-          <span class="badge-pag ${ps}">${labelPagamentoStato(ps)}</span>
-        </div>
-      </div>
-    `;
-  }
-
-  $('#kanban-nuovo').innerHTML = nuovi.length ? nuovi.map(cardHtml).join('') : '<p style="color:var(--muted);font-size:13px;text-align:center;padding:20px">Nessun ordine</p>';
-  $('#kanban-prep').innerHTML = prep.length ? prep.map(cardHtml).join('') : '<p style="color:var(--muted);font-size:13px;text-align:center;padding:20px">Nessun ordine</p>';
-  $('#kanban-pronto').innerHTML = pronti.length ? pronti.map(cardHtml).join('') : '<p style="color:var(--muted);font-size:13px;text-align:center;padding:20px">Nessun ordine</p>';
-
-  const badge = $('#badge-ordini');
-  if (nuovi.length > 0) { badge.textContent = nuovi.length; badge.classList.remove('hidden'); }
-  else badge.classList.add('hidden');
-}
-
-window.apriDettaglioOrdine = function(ordineId) {
-  const o = currentRistorante.ordini.find(x => x.id === ordineId);
-  if (!o) return;
-  $('#ordine-detail-title').textContent = `Ordine #${o.codice} – Tavolo ${o.tavolo}`;
-  const itemsHtml = (o.items || []).map(i =>
-    `<div class="r-item"><span>${i.qty}× ${i.nome}</span><span>${formatPrice(i.prezzo * i.qty)}</span></div>`
-  ).join('');
-  const ps = o.stato_pagamento || defaultPagStato(o.pagamento);
-  const metodo = o.pagamento === 'cassa' ? 'Pago in cassa' : (o.pagamento === 'carta' ? 'Carta' : (o.pagamento || '—'));
-  $('#ordine-detail-body').innerHTML = `
-    <div style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-      <span class="badge-stato ${o.stato}">${labelStato(o.stato)}</span>
-      <span class="badge-pag ${ps}">${labelPagamentoStato(ps)}</span>
-      <span style="color:var(--muted);font-size:13px">${formatTime(o.createdAt)}</span>
-    </div>
-    <div class="ricevuta-items">${itemsHtml}</div>
-    ${o.note ? `<p style="font-size:13px;color:var(--muted);margin:12px 0"><i class="fas fa-sticky-note"></i> ${o.note}</p>` : ''}
-    <p style="font-size:13px;margin:8px 0">Metodo: <strong>${metodo}</strong></p>
-    <div class="ricevuta-totale"><span>Totale</span><strong>${formatPrice(o.totale)}</strong></div>
-  `;
-  let actions = '';
-  if (o.stato === 'nuovo') {
-    actions = `<button class="btn btn-primary" onclick="cambiaStato('${o.id}','in_preparazione')"><i class="fas fa-fire"></i> Inizia preparazione</button>`;
-  } else if (o.stato === 'in_preparazione') {
-    actions = `<button class="btn btn-primary" onclick="cambiaStato('${o.id}','pronto')"><i class="fas fa-check"></i> Segna pronto</button>`;
-  } else if (o.stato === 'pronto') {
-    actions = `<button class="btn btn-primary" onclick="cambiaStato('${o.id}','consegnato')"><i class="fas fa-hand-holding"></i> Consegnato</button>`;
-  }
-  const nextPag = { in_attesa: 'pagato', pagato: 'non_pagato', non_pagato: 'in_attesa' }[ps] || 'pagato';
-  const pagBtnLabel = { pagato: 'Segna pagato', non_pagato: 'Segna non pagato', in_attesa: 'Segna in attesa' }[nextPag];
-  actions += `<button class="btn btn-secondary" onclick="togglePagamento('${o.id}')"><i class="fas fa-money-bill-wave"></i> ${pagBtnLabel}</button>`;
-  if (o.stato !== 'chiuso') {
-    actions += `<button class="btn btn-danger" onclick="chiudiConto('${o.id}')"><i class="fas fa-file-invoice-dollar"></i> Chiudi conto</button>`;
-  }
-  actions += `<button class="btn btn-secondary close-modal" data-modal="modal-ordine">Chiudi</button>`;
-  $('#ordine-detail-actions').innerHTML = actions;
-  $('#ordine-detail-actions .close-modal')?.addEventListener('click', () => $('#modal-ordine').classList.add('hidden'));
-  $('#modal-ordine').classList.remove('hidden');
-};
-
-window.cambiaStato = async function(ordineId, nuovoStato) {
-  await sb.from('ordini').update({ stato: nuovoStato }).eq('id', ordineId);
-  // aggiorna occupato tavolo
-  const o = currentRistorante.ordini.find(x => x.id === ordineId);
-  if (o) {
-    if (nuovoStato === 'consegnato' || nuovoStato === 'chiuso') {
-      await sb.from('tavoli').update({ occupato: false }).eq('id_ristorante', currentRistorante.id).eq('numero', o.tavolo);
-    } else {
-      await sb.from('tavoli').update({ occupato: true }).eq('id_ristorante', currentRistorante.id).eq('numero', o.tavolo);
-    }
-  }
-  $('#modal-ordine').classList.add('hidden');
-  await renderOrdiniKanban();
-  await renderRistDashboard();
-  toast('Stato aggiornato: ' + labelStato(nuovoStato));
-};
-
-window.chiudiConto = async function(ordineId) {
-  if (!confirm('Chiudere il conto di questo ordine?')) return;
-  const o = currentRistorante.ordini.find(x => x.id === ordineId);
-  await sb.from('ordini').update({ stato: 'chiuso', stato_pagamento: 'pagato' }).eq('id', ordineId);
-  if (o) await sb.from('tavoli').update({ occupato: false }).eq('id_ristorante', currentRistorante.id).eq('numero', o.tavolo);
-  $('#modal-ordine').classList.add('hidden');
-  await renderOrdiniKanban();
-  await renderRistDashboard();
-  await renderTavoli();
-  toast('Conto chiuso e segnato come pagato');
-};
-
-window.togglePagamento = async function(ordineId) {
-  const o = currentRistorante.ordini.find(x => x.id === ordineId);
-  if (!o) return;
-  const cur = o.stato_pagamento || defaultPagStato(o.pagamento);
-  const cycle = { in_attesa: 'pagato', pagato: 'non_pagato', non_pagato: 'in_attesa' };
-  const next = cycle[cur] || 'pagato';
-  await sb.from('ordini').update({ stato_pagamento: next }).eq('id', ordineId);
-  await renderOrdiniKanban();
-  await renderRistDashboard();
-  apriDettaglioOrdine(ordineId);
-  toast('Stato pagamento: ' + labelPagamentoStato(next));
-};
-
-// Card navigation
-document.addEventListener('click', (e) => {
-  const card = e.target.closest('.card-tilt');
-  if (!card) return;
-  const goto = card.dataset.goto;
-  const gotoRist = card.dataset.gotoRist;
-  if (goto) {
-    const nav = document.querySelector('#app-admin .nav-item[data-page="' + goto + '"]');
-    if (nav) nav.click();
-  }
-  if (gotoRist) {
-    const nav = document.querySelector('#app-ristoratore .nav-item[data-page="' + gotoRist + '"]');
-    if (nav) nav.click();
-  }
-});
-document.addEventListener('pointermove', (e) => {
-  const card = e.target.closest('.card-tilt');
-  if (!card) return;
-  const r = card.getBoundingClientRect();
-  card.style.setProperty('--mx', ((e.clientX - r.left) / r.width) * 100 + '%');
-  card.style.setProperty('--my', ((e.clientY - r.top) / r.height) * 100 + '%');
-});
-
-// =====================================================
-// TAVOLI + QR (URL reali)
-// =====================================================
-function qrData(ristoranteId, tavolo) {
-  const base = (cfg.SITE_URL || window.location.origin).replace(/\/$/, '');
-  return `${base}/?r=${ristoranteId}&t=${tavolo}`;
-}
-
-async function renderTavoli() {
-  if (!currentRistorante) return;
-  currentRistorante = await loadRistoranteFull(currentRistorante.id);
-  const sale = currentRistorante.sale || ['Sala principale'];
-  const tavoli = currentRistorante.tavoli || [];
-
-  const tabs = $('#sale-tabs');
-  tabs.innerHTML = sale.map((s, i) =>
-    `<button class="sale-tab ${i === currentSala ? 'active' : ''}" data-sala="${i}">${s}</button>`
-  ).join('');
-  tabs.querySelectorAll('.sale-tab').forEach(tab => {
-    tab.addEventListener('click', () => {
-      currentSala = parseInt(tab.dataset.sala);
-      renderTavoli();
-    });
-  });
-
-  const salaTavoli = tavoli.filter(t => (t.sala || 0) === currentSala);
-  const piantina = $('#piantina');
-  if (!salaTavoli.length) {
-    piantina.innerHTML = '<p style="color:var(--muted)">Nessun tavolo in questa sala.</p>';
-  } else {
-    piantina.innerHTML = salaTavoli.map(t => {
-      const label = t.bambini ? `${t.adulti}+${t.bambini}` : `${t.adulti}`;
-      return `
-        <div class="tavolo-shape ${t.forma === 'round' ? 'round' : ''} ${t.occupato ? 'occupato' : ''}"
-             onclick="showQR(${t.numero})" title="Tavolo ${t.numero}">
-          <span>T${t.numero}</span>
-          <span class="posti">${label} posti</span>
-        </div>
-      `;
-    }).join('');
-  }
-
-  const grid = $('#tavoli-grid');
-  grid.innerHTML = '';
-  salaTavoli.forEach(t => {
-    const label = t.bambini ? `${t.adulti} adulti + ${t.bambini} bambini` : `${t.adulti} posti`;
-    const card = document.createElement('div');
-    card.className = 'tavolo-card';
-    card.innerHTML = `
-      <h4>Tavolo ${t.numero} ${t.occupato ? '<span class="badge-stato nuovo">Occupato</span>' : ''}</h4>
-      <div class="posti-info">${label}</div>
-      <div class="qr-mini" id="qr-mini-${t.numero}"></div>
-      <div class="tavolo-actions">
-        <button class="btn btn-secondary btn-sm" onclick="showQR(${t.numero})"><i class="fas fa-qrcode"></i> QR</button>
-        <button class="btn btn-secondary btn-sm" onclick="editTavolo('${t.id}')"><i class="fas fa-edit"></i></button>
-        <button class="btn btn-danger btn-sm" onclick="deleteTavolo('${t.id}')"><i class="fas fa-trash"></i></button>
-      </div>
-    `;
-    grid.appendChild(card);
-    const data = qrData(currentRistorante.id, t.numero);
-    try {
-      new QRCode(card.querySelector(`#qr-mini-${t.numero}`), {
-        text: data, width: 110, height: 110, correctLevel: QRCode.CorrectLevel.M
-      });
-    } catch {
-      card.querySelector(`#qr-mini-${t.numero}`).innerHTML =
-        `<img src="https://api.qrserver.com/v1/create-qr-code/?size=110x110&data=${encodeURIComponent(data)}" alt="QR"/>`;
-    }
-  });
-}
-
-$('#btn-nuova-sala')?.addEventListener('click', () => {
-  $('#form-sala')?.reset();
-  $('#modal-sala')?.classList.remove('hidden');
-});
-
-$('#form-sala')?.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const nome = ($('#sala-nome')?.value || '').trim();
-  if (!nome || !currentRistorante) return;
-  if (!sb) { toast('Database non collegato'); return; }
-  const sale = [...(currentRistorante.sale || []), nome];
-  const { error } = await sb.from('ristoranti').update({ sale }).eq('id', currentRistorante.id);
-  if (error) { toast('Errore: ' + error.message); return; }
-  currentRistorante.sale = sale;
-  $('#modal-sala').classList.add('hidden');
-  await renderTavoli();
-  toast('Sala aggiunta');
-});
-
-window.showQR = function(tavolo) {
-  if (!currentRistorante) return;
-  const container = $('#qrcode-container');
-  container.innerHTML = '';
-  const data = qrData(currentRistorante.id, tavolo);
-  $('#modal-qr-title').textContent = `QR Tavolo ${tavolo}`;
-  $('#qr-info').textContent = `${currentRistorante.nome} · Tavolo ${tavolo}`;
-  try {
-    new QRCode(container, { text: data, width: 220, height: 220, correctLevel: QRCode.CorrectLevel.M });
-  } catch {
-    container.innerHTML = `<img src="https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(data)}" alt="QR"/>`;
-  }
-  $('#modal-qr').classList.remove('hidden');
-};
-
-$('#btn-demo-ristoratore')?.addEventListener('click', () => {
-  if ($('#demo-rist-email')) $('#demo-rist-email').value = '';
-  if ($('#demo-rist-password')) $('#demo-rist-password').value = '';
-  $('#modal-demo-ristoratore').classList.remove('hidden');
-});
-
-$('#btn-avvia-demo-rist')?.addEventListener('click', async () => {
-  const email = ($('#demo-rist-email')?.value || '').trim().toLowerCase();
-  const pass = ($('#demo-rist-password')?.value || '').trim();
-  if (!email || !pass) { toast('Inserisci email e password'); return; }
-  $('#modal-demo-ristoratore').classList.add('hidden');
-  // riusa il login normale
-  const ok = await doLogin(email, pass);
-  if (!ok) {
-    $('#app-admin').classList.add('hidden');
-    $('#login-screen').classList.remove('hidden');
-  } else {
-    $('#app-admin').classList.add('hidden');
-  }
-});
-
-$('#btn-nuovo-tavolo')?.addEventListener('click', () => {
-  if (!currentRistorante) return;
-  const maxNum = (currentRistorante.tavoli || []).reduce((m, t) => Math.max(m, t.numero || 0), 0);
-  $('#modal-tavolo-title').textContent = 'Nuovo tavolo';
-  $('#tavolo-edit-id').value = '';
-  $('#tavolo-numero').value = maxNum + 1;
-  $('#tavolo-adulti').value = 4;
-  $('#tavolo-bambini').value = 0;
-  $('#tavolo-forma').value = 'round';
-  $('#modal-tavolo-edit').classList.remove('hidden');
-});
-
-$('#form-tavolo')?.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  if (!currentRistorante) return;
-  const id = $('#tavolo-edit-id').value;
-  const data = {
-    id_ristorante: currentRistorante.id,
-    numero: parseInt($('#tavolo-numero').value) || 1,
-    adulti: parseInt($('#tavolo-adulti').value) || 4,
-    bambini: parseInt($('#tavolo-bambini').value) || 0,
-    sala: currentSala || 0,
-    forma: $('#tavolo-forma').value || 'round'
-  };
-  if (id) {
-    await sb.from('tavoli').update(data).eq('id', id);
-    toast('Tavolo aggiornato');
-  } else {
-    data.occupato = false;
-    await sb.from('tavoli').insert(data);
-    toast('Tavolo aggiunto');
-  }
-  $('#modal-tavolo-edit').classList.add('hidden');
-  await renderTavoli();
-});
-
-window.editTavolo = function(id) {
-  const t = currentRistorante.tavoli.find(x => x.id === id);
-  if (!t) return;
-  $('#modal-tavolo-title').textContent = 'Modifica tavolo';
-  $('#tavolo-edit-id').value = t.id;
-  $('#tavolo-numero').value = t.numero;
-  $('#tavolo-adulti').value = t.adulti;
-  $('#tavolo-bambini').value = t.bambini || 0;
-  $('#tavolo-forma').value = t.forma || 'round';
-  $('#modal-tavolo-edit').classList.remove('hidden');
-};
-
-window.deleteTavolo = async function(id) {
-  if (!confirm('Eliminare questo tavolo?')) return;
-  await sb.from('tavoli').delete().eq('id', id);
-  await renderTavoli();
-  toast('Tavolo eliminato');
-};
-
-// =====================================================
-// CLIENTE
-// =====================================================
-function showClienteView(view) {
-  ['cliente-menu-view', 'cliente-carrello-view', 'cliente-ricevuta-view', 'cliente-stato-view'].forEach(id => {
-    $(`#${id}`)?.classList.add('hidden');
-  });
-  $(`#cliente-${view}-view`)?.classList.remove('hidden');
-}
-
-function renderClienteMenu() {
-  if (!currentRistorante) return;
-  const menu = (currentRistorante.menu || []).filter(p => p.disponibile !== false);
-  // Ordine categorie come in gestione menu (posizione DB), non casuale
-  const ordered = (currentRistorante.categorie || []).filter(Boolean);
-  const fromMenu = [...new Set(menu.map(p => p.categoria).filter(Boolean))];
-  const orderedCats = [
-    ...ordered.filter(c => fromMenu.includes(c)),
-    ...fromMenu.filter(c => !ordered.includes(c))
-  ];
-  const cats = ['tutti', ...orderedCats];
-  const catEl = $('#cliente-categorie');
-  catEl.innerHTML = cats.map(c =>
-    `<button class="cat-chip ${c === menuFilterCat ? 'active' : ''}" data-cat="${c}">${c === 'tutti' ? 'Tutti' : c}</button>`
-  ).join('');
-  catEl.querySelectorAll('.cat-chip').forEach(chip => {
-    chip.addEventListener('click', () => { menuFilterCat = chip.dataset.cat; renderClienteMenu(); });
-  });
-
-  let filtered;
-  if (menuFilterCat === 'tutti') {
-    const rank = {};
-    orderedCats.forEach((c, i) => { rank[c] = i; });
-    filtered = [...menu].sort((a, b) => (rank[a.categoria] ?? 999) - (rank[b.categoria] ?? 999));
-  } else {
-    filtered = menu.filter(p => p.categoria === menuFilterCat);
-  }
-  const list = $('#cliente-menu-list');
-  if (!filtered.length) {
-    list.innerHTML = '<p style="color:var(--muted);text-align:center;padding:40px">Nessun piatto disponibile.</p>';
-    return;
-  }
-  list.innerHTML = filtered.map(p => {
-    const inCart = cart.find(c => c.id === p.id);
-    const qty = inCart ? inCart.qty : 0;
-    const all = (p.allergeni || []).length ? `<div class="allergeni-tags">⚠ ${(p.allergeni).join(', ')}</div>` : '';
-    return `
-      <div class="menu-item-card">
-        ${p.immagine ? `<img src="${p.immagine}" class="piatto-img" alt="" onerror="this.style.display='none'"/>` : ''}
-        <div class="menu-item-info" style="flex:1">
-          <h4>${p.nome}</h4>
-          ${p.descrizione ? `<p>${p.descrizione}</p>` : ''}
-          <span class="prezzo">${formatPrice(p.prezzo)}</span>
-          ${all}
-        </div>
-        <div class="menu-item-actions">
-          ${qty > 0 ? `
-            <button class="qty-btn" onclick="changeQty('${p.id}',-1)">−</button>
-            <span class="qty-num">${qty}</span>
-            <button class="qty-btn" onclick="changeQty('${p.id}',1)">+</button>
-          ` : `
-            <button class="btn btn-primary btn-sm" onclick="changeQty('${p.id}',1)"><i class="fas fa-plus"></i> Aggiungi</button>
-          `}
-        </div>
-      </div>
-    `;
-  }).join('');
-  updateCartCount();
-}
-
-window.changeQty = function(id, delta) {
-  const p = currentRistorante.menu.find(x => x.id === id);
-  if (!p) return;
-  let item = cart.find(c => c.id === id);
-  if (!item && delta > 0) {
-    cart.push({ id: p.id, nome: p.nome, prezzo: p.prezzo, qty: 1 });
-  } else if (item) {
-    item.qty += delta;
-    if (item.qty <= 0) cart = cart.filter(c => c.id !== id);
-  }
-  renderClienteMenu();
-  if (!$('#cliente-carrello-view').classList.contains('hidden')) renderCarrello();
-};
-
-function updateCartCount() {
-  $('#cart-count').textContent = cart.reduce((s, c) => s + c.qty, 0);
-}
-
-$('#cliente-carrello-btn')?.addEventListener('click', () => {
-  renderCarrello();
-  showClienteView('carrello');
-});
-$('#btn-torna-menu')?.addEventListener('click', () => {
-  showClienteView('menu');
-  renderClienteMenu();
-});
-
-function renderCarrello() {
-  const el = $('#carrello-items');
-  if (!cart.length) {
-    el.innerHTML = '<p style="color:var(--muted);text-align:center">Il carrello è vuoto.</p>';
-    $('#carrello-totale').textContent = formatPrice(0);
-    return;
-  }
-  el.innerHTML = cart.map(c => `
-    <div class="carrello-item">
-      <div>
-        <strong>${c.nome}</strong><br>
-        <small>${formatPrice(c.prezzo)} × ${c.qty}</small>
-      </div>
-      <div class="menu-item-actions">
-        <button class="qty-btn" onclick="changeQty('${c.id}',-1)">−</button>
-        <span class="qty-num">${c.qty}</span>
-        <button class="qty-btn" onclick="changeQty('${c.id}',1)">+</button>
-      </div>
-    </div>
-  `).join('');
-  $('#carrello-totale').textContent = formatPrice(cart.reduce((s, c) => s + c.prezzo * c.qty, 0));
-}
-
-$('#btn-invia-ordine')?.addEventListener('click', async () => {
-  if (!cart.length) { toast('Il carrello è vuoto'); return; }
-  if (!currentRistorante || !currentUser) {
-    toast('Sessione cliente non valida. Riscansiona il QR.');
-    return;
-  }
-  if (!sb) {
-    toast('Database non collegato: controlla config.js');
-    return;
-  }
-
-  const totale = cart.reduce((s, c) => s + c.prezzo * c.qty, 0);
-  const codice = 'ORD-' + Math.random().toString(36).slice(2, 8).toUpperCase();
-  const pagamento = document.querySelector('input[name="pagamento"]:checked')?.value || 'carta';
-  const stato_pagamento = defaultPagStato(pagamento);
-  const note = ($('#ordine-note')?.value || '').trim();
-  const tavoloNum = currentUser.tavolo;
-
-  // Schema nuovo: senza colonna items (usa ordine_riga). Schema vecchio: con items jsonb.
-  const ordineBase = {
-    id_ristorante: currentRistorante.id,
-    codice,
-    tavolo: tavoloNum,
-    note,
-    pagamento,
-    stato_pagamento,
-    totale,
-    stato: 'nuovo'
-  };
-
-  let inserted = null;
-  let error = null;
-
-  // prova con items (schema vecchio)
-  ({ data: inserted, error } = await sb.from('ordini').insert({
-    ...ordineBase,
-    items: cart.map(c => ({ id: c.id, nome: c.nome, prezzo: c.prezzo, qty: c.qty }))
-  }).select().single());
-
-  // se fallisce per colonna items, riprova senza
-  if (error && String(error.message || '').toLowerCase().includes('items')) {
-    ({ data: inserted, error } = await sb.from('ordini').insert(ordineBase).select().single());
-  }
-
-  if (error || !inserted) {
-    toast('Errore invio ordine: ' + (error?.message || 'sconosciuto'));
-    console.error(error);
-    return;
-  }
-
-  // salva righe ordine se la tabella esiste
-  try {
-    const righe = cart.map(c => ({
-      id_ordine: inserted.id,
-      id_piatto: c.id || null,
-      piatto: c.nome,
-      qty_piatti: c.qty,
-      prezzo_pagato: Number(c.prezzo) * c.qty
-    }));
-    await sb.from('ordine_riga').insert(righe);
-  } catch (e) { console.warn('ordine_riga skip', e); }
-
-  try {
-    if (note) await sb.from('messaggio').insert({ id_ordine: inserted.id, testo: note });
-  } catch (e) { console.warn('messaggio skip', e); }
-
-  try {
-    await sb.from('pagamento').insert({
-      id_ordine: inserted.id,
-      metodo: pagamento,
-      importo: totale
-    });
-  } catch (e) { console.warn('pagamento skip', e); }
-
-
-  await sb.from('tavoli').update({ occupato: true })
-    .eq('id_ristorante', currentRistorante.id)
-    .eq('numero', currentUser.tavolo);
-
-  lastOrdineId = inserted.id;
-
-  $('#ricevuta-codice').textContent = codice;
-  $('#ricevuta-rist').textContent = currentRistorante.nome;
-  $('#ricevuta-tavolo').textContent = currentUser.tavolo;
-  $('#ricevuta-ora').textContent = formatTime(inserted.created_at);
-  $('#ricevuta-pagamento').textContent = pagamento === 'cassa' ? 'Pago in cassa' : 'Carta';
-  $('#ricevuta-totale').textContent = formatPrice(totale);
-  $('#ricevuta-stato').textContent = 'Nuovo';
-  $('#ricevuta-stato').className = 'badge-stato nuovo';
-  if ($('#ricevuta-pag-stato')) {
-    $('#ricevuta-pag-stato').textContent = labelPagamentoStato(stato_pagamento);
-    $('#ricevuta-pag-stato').className = 'badge-pag ' + stato_pagamento;
-  }
-  $('#ricevuta-items').innerHTML = cart.map(i => `
-    <div class="r-item"><span>${i.qty}× ${i.nome}</span><span>${formatPrice(i.prezzo * i.qty)}</span></div>
-  `).join('');
-
-  cart = [];
-  updateCartCount();
-  $('#ordine-note').value = '';
-  showClienteView('ricevuta');
-  $('#cliente-stato-btn').style.display = 'inline-flex';
-  startOrdineStatusPolling();
-  toast('Ordine inviato!');
-});
-
-let _statusPoll = null;
-let _lastKnownStato = null;
-
-function stopOrdineStatusPolling() {
-  if (_statusPoll) { clearInterval(_statusPoll); _statusPoll = null; }
-}
-
-function applyOrdineStatusUI(o) {
-  if (!o) return;
-  const stato = o.stato || 'nuovo';
-  const ps = o.stato_pagamento || defaultPagStato(o.pagamento);
-  if ($('#ricevuta-stato')) {
-    $('#ricevuta-stato').textContent = labelStato(stato);
-    $('#ricevuta-stato').className = 'badge-stato ' + stato;
-  }
-  if ($('#ricevuta-pag-stato')) {
-    $('#ricevuta-pag-stato').textContent = labelPagamentoStato(ps);
-    $('#ricevuta-pag-stato').className = 'badge-pag ' + ps;
-  }
-  // timeline se visibile
-  const tl = $('#stato-timeline');
-  if (tl && !$('#cliente-stato-view')?.classList.contains('hidden')) {
-    const steps = ['nuovo', 'in_preparazione', 'pronto', 'consegnato'];
-    const idx = steps.indexOf(stato);
-    tl.innerHTML = steps.map((s, i) => {
-      let cls = '';
-      if (i < idx) cls = 'done';
-      else if (i === idx) cls = 'active';
-      return `<div class="stato-step ${cls}"><div class="dot"></div><span>${labelStato(s)}</span></div>`;
-    }).join('');
-  }
-  if (_lastKnownStato && _lastKnownStato !== stato) {
-    toast('Stato ordine: ' + labelStato(stato));
-  }
-  _lastKnownStato = stato;
-}
-
-function startOrdineStatusPolling() {
-  stopOrdineStatusPolling();
-  _lastKnownStato = null;
-  const tick = async () => {
-    if (!lastOrdineId || !sb) return;
-    try {
-      const { data: o } = await sb.from('ordini').select('*').eq('id', lastOrdineId).single();
-      if (o) applyOrdineStatusUI(o);
-    } catch (e) { console.warn('poll stato', e); }
-  };
-  tick();
-  _statusPoll = setInterval(tick, 4000);
-}
-
-// Bottone aggiorna tenuto come opzionale ma non necessario
-$('#btn-aggiorna-stato')?.addEventListener('click', async () => {
-  if (!lastOrdineId || !sb) return;
-  const { data: o } = await sb.from('ordini').select('*').eq('id', lastOrdineId).single();
-  if (o) applyOrdineStatusUI(o);
-});
-
-$('#btn-nuovo-ordine')?.addEventListener('click', () => {
-  cart = [];
-  updateCartCount();
-  showClienteView('menu');
-  renderClienteMenu();
-});
-
-$('#cliente-stato-btn')?.addEventListener('click', async () => {
-  if (!lastOrdineId) return;
-  const { data: o } = await sb.from('ordini').select('*').eq('id', lastOrdineId).single();
-  if (!o) return;
-  $('#stato-codice').textContent = o.codice;
-  const steps = ['nuovo', 'in_preparazione', 'pronto', 'consegnato'];
-  const idx = steps.indexOf(o.stato);
-  $('#stato-timeline').innerHTML = steps.map((s, i) => {
-    let cls = '';
-    if (i < idx) cls = 'done';
-    else if (i === idx) cls = 'active';
-    return `<div class="stato-step ${cls}"><div class="dot"></div><span>${labelStato(s)}</span></div>`;
-  }).join('');
-  showClienteView('stato');
-});
-
-$('#btn-torna-da-stato')?.addEventListener('click', () => {
-  showClienteView('menu');
-  renderClienteMenu();
-});
-
-$('#btn-indietro-stato')?.addEventListener('click', () => {
-  if (lastOrdineId) showClienteView('ricevuta');
-  else {
-    showClienteView('menu');
-    renderClienteMenu();
-  }
-});
-
-
-
-// =====================================================
-// CREA ADMIN + RESET PASSWORD
-// =====================================================
-$('#btn-crea-primo-admin')?.addEventListener('click', () => {
-  $('#form-crea-admin')?.reset();
-  $('#modal-crea-admin')?.classList.remove('hidden');
-});
-
-$('#form-crea-admin')?.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  if (!sb) { toast('Database non collegato: controlla config.js'); return; }
-  const email = ($('#admin-email')?.value || '').trim().toLowerCase();
-  const password = ($('#admin-password')?.value || '').trim();
-  const nome = ($('#admin-nome')?.value || '').trim() || 'Amministratore';
-  if (!email || !password) { toast('Email e password obbligatorie'); return; }
-
-  const { error } = await sb.from('utenti').insert({
-    email,
-    password_hash: password,
-    ruolo: 'admin',
-    nome
-  });
-  if (error) {
-    toast('Errore: ' + error.message);
-    console.error(error);
-    return;
-  }
-  $('#modal-crea-admin').classList.add('hidden');
-  toast('Admin creato! Accedi con email e password');
-  if ($('#login-email')) $('#login-email').value = email;
-});
-
-window.apriResetPassword = async function(id) {
-  if (!sb) { toast('Database non collegato'); return; }
-  const { data: r } = await sb.from('ristoranti').select('*').eq('id', id).single();
-  if (!r) return;
-  $('#reset-pass-rist-id').value = r.id;
-  $('#reset-pass-email').value = r.email;
-  $('#reset-pass-nome').value = r.nome + ' (' + r.email + ')';
-  $('#reset-pass-value').value = '';
-  $('#modal-reset-pass').classList.remove('hidden');
-};
-
-$('#btn-genera-pass')?.addEventListener('click', () => {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
-  let s = '';
-  for (let i = 0; i < 10; i++) s += chars[Math.floor(Math.random() * chars.length)];
-  $('#reset-pass-value').value = s;
-});
-
-$('#form-reset-pass')?.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  if (!sb) { toast('Database non collegato'); return; }
-  const id = $('#reset-pass-rist-id').value;
-  const email = $('#reset-pass-email').value;
-  const nuova = ($('#reset-pass-value')?.value || '').trim();
-  if (!nuova || nuova.length < 4) { toast('Password troppo corta'); return; }
-
-  const { error: e1 } = await sb.from('ristoranti').update({ password: nuova }).eq('id', id);
-  if (e1) { toast('Errore ristoranti: ' + e1.message); return; }
-
-  const { data: u } = await sb.from('utenti').select('id').eq('email', email).maybeSingle();
-  if (u) {
-    await sb.from('utenti').update({ password_hash: nuova }).eq('id', u.id);
-  } else {
-    await sb.from('utenti').insert({
-      email,
-      password_hash: nuova,
-      ruolo: 'ristoratore',
-      nome: $('#reset-pass-nome').value
-    });
-  }
-
-  $('#modal-reset-pass').classList.add('hidden');
-  toast('Nuova password salvata: ' + nuova);
-});
-
-// =====================================================
-// AVVIO: se c'è ?r=...&t=... apri come cliente (QR)
-// =====================================================
-(async function initFromQR() {
-  const params = new URLSearchParams(window.location.search);
-  const rId = params.get('r');
-  const t = parseInt(params.get('t'), 10);
-  if (!rId || !t) return;
-
-  // Nascondi subito il login (anche se il DB è lento)
-  document.documentElement.classList.add('qr-entry');
-  const login = $('#login-screen');
-  const appC = $('#app-cliente');
-  if (login) login.classList.add('hidden');
-  if (appC) { appC.classList.remove('hidden'); appC.classList.add('cliente-ui'); }
-  document.body.classList.add('cliente-night');
-
-  try {
-    let r = null;
-    if (sb) r = await loadRistoranteFull(rId);
-    if (!r) {
-      toast('Ristorante non trovato o database non collegato');
-      return;
-    }
-    currentUser = { role: 'cliente', ristoranteId: rId, tavolo: t };
-    currentRistorante = r;
-    cart = [];
-    lastOrdineId = null;
-    document.body.classList.add('cliente-night');
-    if ($('#cliente-rist-nome')) $('#cliente-rist-nome').textContent = r.nome;
-    if ($('#cliente-tavolo-num')) $('#cliente-tavolo-num').textContent = t;
-    showClienteView('menu');
-    renderClienteMenu();
-  } catch (e) {
-    console.error('QR init error:', e);
-    toast('Errore apertura menu da QR');
-  }
-})();

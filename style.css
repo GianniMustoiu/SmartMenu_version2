@@ -1289,3 +1289,33 @@ body.cliente-night { color-scheme: dark; }
 .btn-danger:hover:not(:disabled) {
   box-shadow: 0 8px 18px rgba(248, 113, 113, 0.3);
 }
+
+.prep-list .prep-line {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 8px 0;
+  border-bottom: 1px dashed var(--border);
+  font-size: 15px;
+}
+.prep-list .prep-line:last-child { border-bottom: none; }
+.prep-qty {
+  font-weight: 800;
+  color: var(--primary);
+  min-width: 2.2em;
+}
+.prep-name { font-weight: 600; }
+.kanban-items {
+  line-height: 1.45;
+  margin-top: 4px !important;
+}
+#select-ordini-cliente {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 14px;
+}
