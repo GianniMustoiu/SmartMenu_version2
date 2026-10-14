@@ -1,3 +1,4 @@
+
 // =====================================================
 // MenuPro – Versione collegata a Supabase
 // =====================================================
@@ -98,7 +99,44 @@ async function doLogin(email, pass) {
   email = (email || '').trim().toLowerCase();
   pass = (pass || '').trim();
 
-  // Admin
+  if (!pass) {
+    toast('Inserisci la password');
+    return false;
+  }
+
+  // 1) Prova tabella utenti (admin e eventuali altri utenti)
+  try {
+    let query = supabase.from('utenti').select('*').eq('password_hash', pass);
+    if (email) query = query.eq('email', email);
+    const { data: utenti, error: errUtenti } = await query;
+
+    if (errUtenti) {
+      console.error('Errore utenti:', errUtenti);
+      // se la tabella non esiste o RLS blocca, continua con fallback
+    } else if (utenti && utenti.length > 0) {
+      // prendi il primo match (preferisci email esatta se presente)
+      const u = email
+        ? (utenti.find(x => x.email === email) || utenti[0])
+        : utenti.find(x => x.ruolo === 'admin') || utenti[0];
+
+      if (u && u.ruolo === 'admin') {
+        currentUser = { role: 'admin', email: u.email, id: u.id };
+        $('#login-screen').classList.add('hidden');
+        $('#app-admin').classList.remove('hidden');
+        $('#admin-user-email').textContent = u.email;
+        await renderAdminDashboard();
+        await renderAdminTable();
+        await renderAbbonamenti();
+        await renderMieiIncassi();
+        await populateIncassiSelect();
+        return true;
+      }
+    }
+  } catch (e) {
+    console.error('Login utenti fallito:', e);
+  }
+
+  // 2) Fallback admin hardcoded (se password = admin)
   if (pass.toLowerCase() === 'admin') {
     if (!email) email = 'admin@menupro.it';
     currentUser = { role: 'admin', email };
@@ -113,12 +151,12 @@ async function doLogin(email, pass) {
     return true;
   }
 
-  if (!email || !pass) {
+  if (!email) {
     toast('Inserisci email e password');
     return false;
   }
 
-  // Ristoratore
+  // 3) Ristoratore (tabella ristoranti)
   const { data: r, error } = await supabase
     .from('ristoranti')
     .select('*')
@@ -126,7 +164,11 @@ async function doLogin(email, pass) {
     .eq('password', pass)
     .maybeSingle();
 
-  if (error) { console.error(error); toast('Errore di connessione'); return false; }
+  if (error) {
+    console.error(error);
+    toast('Errore di connessione al database. Controlla config.js');
+    return false;
+  }
 
   if (r) {
     currentRistorante = await loadRistoranteFull(r.id);
@@ -142,7 +184,7 @@ async function doLogin(email, pass) {
     return true;
   }
 
-  toast('Credenziali non valide. Admin: password admin');
+  toast('Credenziali non valide. Admin: email admin@menupro.it / password admin');
   return false;
 }
 
