@@ -172,12 +172,7 @@ async function doLogin(email, pass) {
     console.warn('API /api/utenti non disponibile, uso fallback client:', e.message);
   }
 
-  // ========== 2) Fallback locale: password admin ==========
-  if (pass.toLowerCase() === 'admin') {
-    return await enterAsAdmin(email || 'admin@menupro.it');
-  }
-
-  // ========== 3) Fallback client: tabella utenti ==========
+  // ========== 2) Solo account reali (niente login admin con sola password "admin") ==========
   if (!email) {
     toast('Inserisci email e password');
     return false;
@@ -228,7 +223,7 @@ async function doLogin(email, pass) {
     return false;
   }
 
-  toast('Credenziali non valide. Prova: password admin');
+  toast('Credenziali non valide');
   return false;
 }
 
@@ -242,6 +237,8 @@ $('#login-form').addEventListener('submit', async (e) => {
 // =====================================================
 $$('.logout-btn').forEach(btn => {
   btn.addEventListener('click', () => {
+    stopOrdineStatusPolling();
+    document.body.classList.remove('cliente-night');
     currentUser = null;
     currentRistorante = null;
     cart = [];
@@ -260,9 +257,10 @@ $$('.logout-btn').forEach(btn => {
 $$('.theme-toggle').forEach(btn => {
   btn.addEventListener('click', () => {
     const html = document.documentElement;
-    const isDark = html.getAttribute('data-theme') === 'dark';
-    html.setAttribute('data-theme', isDark ? '' : 'dark');
-    $$('.theme-toggle i').forEach(i => { i.className = isDark ? 'fas fa-moon' : 'fas fa-sun'; });
+    const isLight = html.getAttribute('data-theme') === 'light';
+    // default = blu notte; light = tema chiaro
+    html.setAttribute('data-theme', isLight ? '' : 'light');
+    $$('.theme-toggle i').forEach(i => { i.className = isLight ? 'fas fa-sun' : 'fas fa-moon'; });
   });
 });
 
@@ -390,7 +388,7 @@ function renderAdminCharts(ristoranti) {
     if (chartRicaviAdmin) chartRicaviAdmin.destroy();
     chartRicaviAdmin = new Chart(ctx1, {
       type: 'bar',
-      data: { labels: mesi, datasets: [{ label: '€', data: vals, backgroundColor: 'rgba(196, 92, 38, 0.7)', borderRadius: 6, borderSkipped: false }] },
+      data: { labels: mesi, datasets: [{ label: '€', data: vals, backgroundColor: 'rgba(59, 130, 246, 0.75)', borderRadius: 6, borderSkipped: false }] },
       options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { callback: v => '€' + v } }, x: { grid: { display: false } } } }
     });
   }
@@ -401,7 +399,7 @@ function renderAdminCharts(ristoranti) {
     if (chartPianiAdmin) chartPianiAdmin.destroy();
     chartPianiAdmin = new Chart(ctx2, {
       type: 'doughnut',
-      data: { labels: ['Base', 'Pro', 'Enterprise'], datasets: [{ data: [counts.base, counts.pro, counts.enterprise], backgroundColor: ['#c4a574', '#c45c26', '#3d6b8c'], borderWidth: 0 }] },
+      data: { labels: ['Base', 'Pro', 'Enterprise'], datasets: [{ data: [counts.base, counts.pro, counts.enterprise], backgroundColor: ['#64748b', '#3b82f6', '#818cf8'], borderWidth: 0 }] },
       options: { responsive: true, plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, padding: 12 } } } }
     });
   }
@@ -903,6 +901,7 @@ $('#btn-avvia-demo')?.addEventListener('click', async () => {
   $('#app-cliente').classList.remove('hidden');
   $('#cliente-rist-nome').textContent = r.nome;
   $('#cliente-tavolo-num').textContent = tavolo;
+  document.body.classList.add('cliente-night');
   showClienteView('menu');
   renderClienteMenu();
 });
@@ -997,7 +996,7 @@ function renderRistCharts() {
     const data = [ordini.reduce((s, o) => s + Number(o.totale), 0)];
     chartIncassiRist = new Chart(ctx1, {
       type: 'bar',
-      data: { labels, datasets: [{ label: '€', data, backgroundColor: 'rgba(196, 92, 38, 0.7)', borderRadius: 6 }] },
+      data: { labels, datasets: [{ label: '€', data, backgroundColor: 'rgba(59, 130, 246, 0.75)', borderRadius: 6 }] },
       options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } }
     });
   }
@@ -1567,7 +1566,14 @@ function showClienteView(view) {
 function renderClienteMenu() {
   if (!currentRistorante) return;
   const menu = (currentRistorante.menu || []).filter(p => p.disponibile !== false);
-  const cats = ['tutti', ...new Set(menu.map(p => p.categoria).filter(Boolean))];
+  // Ordine categorie come in gestione menu (posizione DB), non casuale
+  const ordered = (currentRistorante.categorie || []).filter(Boolean);
+  const fromMenu = [...new Set(menu.map(p => p.categoria).filter(Boolean))];
+  const orderedCats = [
+    ...ordered.filter(c => fromMenu.includes(c)),
+    ...fromMenu.filter(c => !ordered.includes(c))
+  ];
+  const cats = ['tutti', ...orderedCats];
   const catEl = $('#cliente-categorie');
   catEl.innerHTML = cats.map(c =>
     `<button class="cat-chip ${c === menuFilterCat ? 'active' : ''}" data-cat="${c}">${c === 'tutti' ? 'Tutti' : c}</button>`
@@ -1576,7 +1582,14 @@ function renderClienteMenu() {
     chip.addEventListener('click', () => { menuFilterCat = chip.dataset.cat; renderClienteMenu(); });
   });
 
-  let filtered = menuFilterCat === 'tutti' ? menu : menu.filter(p => p.categoria === menuFilterCat);
+  let filtered;
+  if (menuFilterCat === 'tutti') {
+    const rank = {};
+    orderedCats.forEach((c, i) => { rank[c] = i; });
+    filtered = [...menu].sort((a, b) => (rank[a.categoria] ?? 999) - (rank[b.categoria] ?? 999));
+  } else {
+    filtered = menu.filter(p => p.categoria === menuFilterCat);
+  }
   const list = $('#cliente-menu-list');
   if (!filtered.length) {
     list.innerHTML = '<p style="color:var(--muted);text-align:center;padding:40px">Nessun piatto disponibile.</p>';
@@ -1762,17 +1775,66 @@ $('#btn-invia-ordine')?.addEventListener('click', async () => {
   $('#ordine-note').value = '';
   showClienteView('ricevuta');
   $('#cliente-stato-btn').style.display = 'inline-flex';
+  startOrdineStatusPolling();
   toast('Ordine inviato!');
 });
 
-$('#btn-aggiorna-stato')?.addEventListener('click', async () => {
-  if (!lastOrdineId) return;
-  const { data: o } = await sb.from('ordini').select('*').eq('id', lastOrdineId).single();
-  if (o) {
-    $('#ricevuta-stato').textContent = labelStato(o.stato);
-    $('#ricevuta-stato').className = 'badge-stato ' + o.stato;
-    toast('Stato: ' + labelStato(o.stato));
+let _statusPoll = null;
+let _lastKnownStato = null;
+
+function stopOrdineStatusPolling() {
+  if (_statusPoll) { clearInterval(_statusPoll); _statusPoll = null; }
+}
+
+function applyOrdineStatusUI(o) {
+  if (!o) return;
+  const stato = o.stato || 'nuovo';
+  const ps = o.stato_pagamento || defaultPagStato(o.pagamento);
+  if ($('#ricevuta-stato')) {
+    $('#ricevuta-stato').textContent = labelStato(stato);
+    $('#ricevuta-stato').className = 'badge-stato ' + stato;
   }
+  if ($('#ricevuta-pag-stato')) {
+    $('#ricevuta-pag-stato').textContent = labelPagamentoStato(ps);
+    $('#ricevuta-pag-stato').className = 'badge-pag ' + ps;
+  }
+  // timeline se visibile
+  const tl = $('#stato-timeline');
+  if (tl && !$('#cliente-stato-view')?.classList.contains('hidden')) {
+    const steps = ['nuovo', 'in_preparazione', 'pronto', 'consegnato'];
+    const idx = steps.indexOf(stato);
+    tl.innerHTML = steps.map((s, i) => {
+      let cls = '';
+      if (i < idx) cls = 'done';
+      else if (i === idx) cls = 'active';
+      return `<div class="stato-step ${cls}"><div class="dot"></div><span>${labelStato(s)}</span></div>`;
+    }).join('');
+  }
+  if (_lastKnownStato && _lastKnownStato !== stato) {
+    toast('Stato ordine: ' + labelStato(stato));
+  }
+  _lastKnownStato = stato;
+}
+
+function startOrdineStatusPolling() {
+  stopOrdineStatusPolling();
+  _lastKnownStato = null;
+  const tick = async () => {
+    if (!lastOrdineId || !sb) return;
+    try {
+      const { data: o } = await sb.from('ordini').select('*').eq('id', lastOrdineId).single();
+      if (o) applyOrdineStatusUI(o);
+    } catch (e) { console.warn('poll stato', e); }
+  };
+  tick();
+  _statusPoll = setInterval(tick, 4000);
+}
+
+// Bottone aggiorna tenuto come opzionale ma non necessario
+$('#btn-aggiorna-stato')?.addEventListener('click', async () => {
+  if (!lastOrdineId || !sb) return;
+  const { data: o } = await sb.from('ordini').select('*').eq('id', lastOrdineId).single();
+  if (o) applyOrdineStatusUI(o);
 });
 
 $('#btn-nuovo-ordine')?.addEventListener('click', () => {
@@ -1904,7 +1966,8 @@ $('#form-reset-pass')?.addEventListener('submit', async (e) => {
   const login = $('#login-screen');
   const appC = $('#app-cliente');
   if (login) login.classList.add('hidden');
-  if (appC) appC.classList.remove('hidden');
+  if (appC) { appC.classList.remove('hidden'); appC.classList.add('cliente-ui'); }
+  document.body.classList.add('cliente-night');
 
   try {
     let r = null;
@@ -1917,6 +1980,7 @@ $('#form-reset-pass')?.addEventListener('submit', async (e) => {
     currentRistorante = r;
     cart = [];
     lastOrdineId = null;
+    document.body.classList.add('cliente-night');
     if ($('#cliente-rist-nome')) $('#cliente-rist-nome').textContent = r.nome;
     if ($('#cliente-tavolo-num')) $('#cliente-tavolo-num').textContent = t;
     showClienteView('menu');
