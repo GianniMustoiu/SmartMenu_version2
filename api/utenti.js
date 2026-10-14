@@ -75,20 +75,7 @@ module.exports = async function handler(req, res) {
         });
       }
 
-      // 2) Fallback admin
-      if (passClean.toLowerCase() === 'admin') {
-        return res.status(200).json({
-          ok: true,
-          user: {
-            id: null,
-            email: emailClean || 'admin@menupro.it',
-            ruolo: 'admin',
-            nome: 'Amministratore'
-          }
-        });
-      }
-
-      // 3) Ristoratore
+      // 2) Ristoratore (niente accesso admin con sola password generica)
       if (emailClean) {
         const pathR = 'ristoranti?select=id,nome,email,citta&email=eq.' + encodeURIComponent(emailClean) +
           '&password=eq.' + encodeURIComponent(passClean) + '&limit=1';
