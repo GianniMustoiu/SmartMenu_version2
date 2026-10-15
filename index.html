@@ -25,18 +25,22 @@
         <h1>MenuPro</h1>
         <p>Gestione ristorante, ordini e menu</p>
       </div>
-      <form id="login-form" novalidate>
+      <form id="login-form">
         <div class="form-group">
           <label>Email</label>
-          <input type="text" id="login-email"/>
+          <input type="email" id="login-email" placeholder="email@esempio.it" autocomplete="username" required />
         </div>
         <div class="form-group">
           <label>Password</label>
-          <input type="password" id="login-password" />
+          <input type="password" id="login-password" placeholder="Password" autocomplete="current-password" required />
         </div>
         <button type="submit" class="btn btn-primary btn-block">
           <i class="fas fa-sign-in-alt"></i> Accedi
         </button>
+        <p class="hint">
+          <strong>Admin:</strong> email e password creati dal super-admin<br>
+          <strong>Ristoratore:</strong> email e password del ristorante
+        </p>
       </form>
     </div>
   </div>
@@ -59,11 +63,8 @@
         <button id="btn-demo-utente" class="btn btn-primary btn-sm" style="width:100%;margin-bottom:8px">
           <i class="fas fa-user"></i> Entra nell'area cliente
         </button>
-        <button id="btn-demo-ristoratore" class="btn btn-secondary btn-sm" style="width:100%;margin-bottom:10px">
-          <i class="fas fa-store"></i> Entra nell'area ristoratore
-        </button>
         <div style="display:flex;gap:12px">
-          <button class="btn-icon theme-toggle" title="Tema chiaro/scuro"><i class="fas fa-sun"></i></button>
+          <button class="btn-icon theme-toggle" title="Tema"><i class="fas fa-moon"></i></button>
           <button class="btn-icon logout-btn" title="Esci"><i class="fas fa-sign-out-alt"></i></button>
         </div>
       </div>
@@ -212,8 +213,7 @@
       <section id="page-impostazioni" class="page hidden">
         <div class="settings-card">
           <h3>Impostazioni</h3>
-          <p>I dati di questa demo restano solo su questo browser. Puoi cancellarli quando vuoi.</p>
-          <button id="btn-reset" class="btn btn-danger"><i class="fas fa-trash"></i> Cancella tutti i dati</button>
+          <p>Nessuna impostazione disponibile al momento.</p>
         </div>
       </section>
     </main>
@@ -232,7 +232,7 @@
         <a href="#" class="nav-item" data-page="rist-tavoli"><i class="fas fa-qrcode"></i> <span>Tavoli &amp; QR</span></a>
       </nav>
       <div class="sidebar-footer">
-        <button class="btn-icon theme-toggle" title="Tema chiaro/scuro"><i class="fas fa-sun"></i></button>
+        <button class="btn-icon theme-toggle" title="Tema"><i class="fas fa-moon"></i></button>
         <button class="btn-icon logout-btn" title="Esci"><i class="fas fa-sign-out-alt"></i></button>
       </div>
     </aside>
@@ -392,10 +392,6 @@
             <i class="fas fa-check-circle"></i>
             <h2>Ordine ricevuto</h2>
             <p>Codice: <strong id="ricevuta-codice"></strong></p>
-            <div class="form-group" style="margin:12px 0 0;text-align:left">
-              <label style="text-transform:none;letter-spacing:0;font-size:12px">I tuoi ordini a questo tavolo</label>
-              <select id="select-ordini-cliente" style="margin-top:6px"></select>
-            </div>
           </div>
           <div class="ricevuta-info">
             <p><strong id="ricevuta-rist"></strong></p>
@@ -413,10 +409,7 @@
           <div class="ricevuta-stato" style="margin-top:8px">
             Pagamento: <span id="ricevuta-pag-stato" class="badge-pag in_attesa">In attesa</span>
           </div>
-          <p class="auto-status-hint" style="margin-top:14px;font-size:12px;color:var(--muted)">
-            <i class="fas fa-sync fa-spin" style="margin-right:6px"></i> Stato aggiornato automaticamente
-          </p>
-          <button id="btn-aggiorna-stato" class="btn btn-secondary btn-block" style="margin-top:10px;display:none">
+          <button id="btn-aggiorna-stato" class="btn btn-secondary btn-block" style="margin-top:16px">
             <i class="fas fa-sync"></i> Aggiorna stato
           </button>
           <button id="btn-nuovo-ordine" class="btn btn-primary btn-block" style="margin-top:10px">
@@ -470,7 +463,7 @@
           <div class="form-group">
             <label>Password *</label>
             <div class="password-wrap">
-              <input type="password" id="password" minlength="4" required />
+              <input type="password" id="password" minlength="8" required />
               <button type="button" class="toggle-pass" id="toggle-pass"><i class="fas fa-eye"></i></button>
             </div>
           </div>
@@ -639,26 +632,6 @@
     </div>
   </div>
 
-    <div id="modal-demo-ristoratore" class="modal hidden">
-    <div class="modal-content" style="max-width:420px">
-      <div class="modal-header">
-        <h3>Entra nell'area ristoratore</h3>
-        <button class="close-modal" data-modal="modal-demo-ristoratore">&times;</button>
-      </div>
-      <div style="padding:20px 24px">
-        <div class="form-group">
-          <label>Email</label>
-          <input type="email" id="demo-rist-email" placeholder="email@ristorante.it" />
-        </div>
-        <div class="form-group">
-          <label>Password</label>
-          <input type="password" id="demo-rist-password" placeholder="Password" />
-        </div>
-        <button id="btn-avvia-demo-rist" class="btn btn-primary btn-block"><i class="fas fa-store"></i> Entra</button>
-      </div>
-    </div>
-  </div>
-
   <div id="modal-tavolo-edit" class="modal hidden">
     <div class="modal-content" style="max-width:420px">
       <div class="modal-header">
@@ -696,7 +669,6 @@
     </div>
   </div>
 
-  
   <!-- Modal nuova sala -->
   <div id="modal-sala" class="modal hidden">
     <div class="modal-content" style="max-width:400px">
@@ -716,7 +688,8 @@
       </form>
     </div>
   </div>
-<!-- Modal reset password ristoratore -->
+
+  <!-- Modal reset password ristoratore -->
   <div id="modal-reset-pass" class="modal hidden">
     <div class="modal-content" style="max-width:420px">
       <div class="modal-header">
@@ -732,35 +705,12 @@
         </div>
         <div class="form-group" style="padding:0 24px">
           <label>Nuova password *</label>
-          <input type="text" id="reset-pass-value" required minlength="4" placeholder="Nuova password" />
+          <input type="text" id="reset-pass-value" required minlength="8" placeholder="Nuova password" />
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-secondary close-modal" data-modal="modal-reset-pass">Annulla</button>
           <button type="button" id="btn-genera-pass" class="btn btn-secondary"><i class="fas fa-random"></i> Genera</button>
           <button type="submit" class="btn btn-primary">Salva password</button>
-        </div>
-      </form>
-    </div>
-  </div>
-
-
-  <!-- Modal sblocco gestione menu (admin) -->
-  <div id="modal-admin-menu-login" class="modal hidden">
-    <div class="modal-content" style="max-width:400px">
-      <div class="modal-header">
-        <h3>Sblocca gestione menu</h3>
-        <button class="close-modal" data-modal="modal-admin-menu-login">&times;</button>
-      </div>
-      <form id="form-admin-menu-login">
-        <input type="hidden" id="admin-menu-rist-id" />
-        <div class="form-group" style="padding:16px 24px">
-          <label>Password account admin *</label>
-          <input type="password" id="admin-menu-password" required minlength="4" placeholder="Password admin" autocomplete="current-password" />
-          <small style="color:var(--muted);display:block;margin-top:6px">Richiesta per accedere al menu del ristorante</small>
-        </div>
-        <div class="modal-footer">
-          <button type="button" class="btn btn-secondary close-modal" data-modal="modal-admin-menu-login">Annulla</button>
-          <button type="submit" class="btn btn-primary">Sblocca</button>
         </div>
       </form>
     </div>
