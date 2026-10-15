@@ -24,6 +24,7 @@ let currentPeriod = 'oggi';
 let currentSala = 0;
 let menuFilterCat = 'tutti';
 let lastOrdineId = null;
+let sessionOrders = []; // { id, codice } ordini del tavolo in questa sessione
 
 let chartRicaviAdmin = null;
 let chartPianiAdmin = null;
@@ -94,6 +95,27 @@ async function loadRistoranteFull(id) {
     items: o.items || [],
     createdAt: o.created_at
   }));
+  // se items vuoti, prova ordine_riga in batch leggero
+  const needRows = r.ordini.filter(o => !(o.items && o.items.length));
+  if (needRows.length && sb) {
+    try {
+      const ids = needRows.map(o => o.id);
+      const { data: righe } = await sb.from('ordine_riga').select('*').in('id_ordine', ids);
+      if (righe && righe.length) {
+        const byOrd = {};
+        righe.forEach(row => {
+          (byOrd[row.id_ordine] = byOrd[row.id_ordine] || []).push({
+            nome: row.piatto || row.nome || 'Piatto',
+            qty: row.qty_piatti || row.qty || 1,
+            prezzo: 0
+          });
+        });
+        r.ordini.forEach(o => {
+          if (!(o.items && o.items.length) && byOrd[o.id]) o.items = byOrd[o.id];
+        });
+      }
+    } catch (e) { console.warn('ordine_riga load', e); }
+  }
   r.pagamenti = pagamenti.data || [];
   r.sale = r.sale || ['Sala principale'];
   return r;
@@ -628,7 +650,6 @@ window.editRistorante = async function(id) {
 };
 
 window.deleteRistorante = async function(id) {
-  if (!confirm('Eliminare questo ristorante?')) return;
   const { error } = await sb.from('ristoranti').delete().eq('id', id);
   if (error) { toast('Errore eliminazione'); return; }
   await renderAdminTable($('#search-ristoranti')?.value || '');
@@ -637,9 +658,41 @@ window.deleteRistorante = async function(id) {
   toast('Ristorante eliminato');
 };
 
-window.adminApriMenu = async function(id) {
+window.adminApriMenu = function(id) {
+  // richiede conferma password admin
+  $('#admin-menu-rist-id').value = id;
+  $('#admin-menu-password').value = '';
+  $('#modal-admin-menu-login')?.classList.remove('hidden');
+  setTimeout(() => $('#admin-menu-password')?.focus(), 100);
+};
+
+$('#form-admin-menu-login')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const id = $('#admin-menu-rist-id')?.value;
+  const pass = ($('#admin-menu-password')?.value || '').trim();
+  if (!pass) { toast('Inserisci la password admin'); return; }
+  if (!sb) { toast('Database non collegato'); return; }
+
+  // verifica password rispetto all'admin loggato (email corrente)
+  const email = (currentUser && currentUser.email) || '';
+  let ok = false;
+  if (email) {
+    const { data: u } = await sb.from('utenti').select('id').eq('email', email).eq('password_hash', pass).eq('ruolo', 'admin').maybeSingle();
+    ok = !!u;
+  }
+  if (!ok) {
+    // prova qualsiasi admin con quella password
+    const { data: u2 } = await sb.from('utenti').select('id').eq('password_hash', pass).eq('ruolo', 'admin').limit(1).maybeSingle();
+    ok = !!u2;
+  }
+  if (!ok) {
+    toast('Password non valida');
+    return;
+  }
+
+  $('#modal-admin-menu-login').classList.add('hidden');
   const r = await loadRistoranteFull(id);
-  if (!r) return;
+  if (!r) { toast('Ristorante non trovato'); return; }
   currentRistorante = r;
   currentUser = { role: 'ristoratore', email: r.email, ristoranteId: r.id, fromAdmin: true };
   $('#app-admin').classList.add('hidden');
@@ -653,7 +706,8 @@ window.adminApriMenu = async function(id) {
   $('#page-rist-menu').classList.remove('hidden');
   $('#rist-page-title').textContent = 'Gestione Menu';
   await renderMenuTable();
-};
+  toast('Accesso menu autorizzato');
+});
 
 // =====================================================
 // ABBONAMENTI
@@ -864,7 +918,6 @@ $('#select-rist-incassi')?.addEventListener('change', async () => {
 
 // RESET
 $('#btn-reset')?.addEventListener('click', async () => {
-  if (!confirm('Cancellare TUTTI i dati? Questa operazione non si può annullare.')) return;
   await sb.from('pagamenti_abbonamento').delete().neq('id', '00000000-0000-0000-0000-000000000000');
   await sb.from('ordini').delete().neq('id', '00000000-0000-0000-0000-000000000000');
   await sb.from('piatti').delete().neq('id', '00000000-0000-0000-0000-000000000000');
@@ -1219,7 +1272,6 @@ window.editPiatto = async function(id) {
 };
 
 window.deletePiatto = async function(id) {
-  if (!confirm('Eliminare questo piatto?')) return;
   await sb.from('piatti').delete().eq('id', id);
   await renderMenuTable($('#search-menu')?.value || '');
   await renderRistDashboard();
@@ -1267,13 +1319,30 @@ async function renderOrdiniKanban() {
   else badge.classList.add('hidden');
 }
 
-window.apriDettaglioOrdine = function(ordineId) {
-  const o = currentRistorante.ordini.find(x => x.id === ordineId);
+window.apriDettaglioOrdine = async function(ordineId) {
+  let o = currentRistorante.ordini.find(x => x.id === ordineId);
   if (!o) return;
+  // assicura lista piatti (items o ordine_riga)
+  let items = o.items || [];
+  if ((!items || !items.length) && sb) {
+    try {
+      const { data: righe } = await sb.from('ordine_riga').select('*').eq('id_ordine', ordineId);
+      if (righe && righe.length) {
+        items = righe.map(r => ({
+          nome: r.piatto || r.nome || 'Piatto',
+          qty: r.qty_piatti || r.qty || 1,
+          prezzo: 0
+        }));
+        o.items = items;
+      }
+    } catch (e) {}
+  }
   $('#ordine-detail-title').textContent = `Ordine #${o.codice} – Tavolo ${o.tavolo}`;
-  const itemsHtml = (o.items || []).map(i =>
-    `<div class="r-item"><span>${i.qty}× ${i.nome}</span><span>${formatPrice(i.prezzo * i.qty)}</span></div>`
-  ).join('');
+  const itemsHtml = (items || []).length
+    ? (items || []).map(i =>
+        `<div class="r-item prep-line"><span class="prep-qty">${i.qty}×</span> <span class="prep-name">${i.nome}</span></div>`
+      ).join('')
+    : '<p style="color:var(--muted)">Nessun piatto in questo ordine</p>';
   const ps = o.stato_pagamento || defaultPagStato(o.pagamento);
   const metodo = o.pagamento === 'cassa' ? 'Pago in cassa' : (o.pagamento === 'carta' ? 'Carta' : (o.pagamento || '—'));
   $('#ordine-detail-body').innerHTML = `
@@ -1282,7 +1351,8 @@ window.apriDettaglioOrdine = function(ordineId) {
       <span class="badge-pag ${ps}">${labelPagamentoStato(ps)}</span>
       <span style="color:var(--muted);font-size:13px">${formatTime(o.createdAt)}</span>
     </div>
-    <div class="ricevuta-items">${itemsHtml}</div>
+    <h4 style="font-size:13px;margin:10px 0 8px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em">Da preparare</h4>
+    <div class="ricevuta-items prep-list">${itemsHtml}</div>
     ${o.note ? `<p style="font-size:13px;color:var(--muted);margin:12px 0"><i class="fas fa-sticky-note"></i> ${o.note}</p>` : ''}
     <p style="font-size:13px;margin:8px 0">Metodo: <strong>${metodo}</strong></p>
     <div class="ricevuta-totale"><span>Totale</span><strong>${formatPrice(o.totale)}</strong></div>
@@ -1325,7 +1395,6 @@ window.cambiaStato = async function(ordineId, nuovoStato) {
 };
 
 window.chiudiConto = async function(ordineId) {
-  if (!confirm('Chiudere il conto di questo ordine?')) return;
   const o = currentRistorante.ordini.find(x => x.id === ordineId);
   await sb.from('ordini').update({ stato: 'chiuso', stato_pagamento: 'pagato' }).eq('id', ordineId);
   if (o) await sb.from('tavoli').update({ occupato: false }).eq('id_ristorante', currentRistorante.id).eq('numero', o.tavolo);
@@ -1547,7 +1616,6 @@ window.editTavolo = function(id) {
 };
 
 window.deleteTavolo = async function(id) {
-  if (!confirm('Eliminare questo tavolo?')) return;
   await sb.from('tavoli').delete().eq('id', id);
   await renderTavoli();
   toast('Tavolo eliminato');
@@ -1753,6 +1821,10 @@ $('#btn-invia-ordine')?.addEventListener('click', async () => {
     .eq('numero', currentUser.tavolo);
 
   lastOrdineId = inserted.id;
+  if (!sessionOrders.find(x => x.id === inserted.id)) {
+    sessionOrders.push({ id: inserted.id, codice });
+  }
+  updateClienteOrdiniSelect();
 
   $('#ricevuta-codice').textContent = codice;
   $('#ricevuta-rist').textContent = currentRistorante.nome;
@@ -1778,6 +1850,65 @@ $('#btn-invia-ordine')?.addEventListener('click', async () => {
   startOrdineStatusPolling();
   toast('Ordine inviato!');
 });
+
+
+function updateClienteOrdiniSelect() {
+  const sel = $('#select-ordini-cliente');
+  if (!sel) return;
+  if (!sessionOrders.length) {
+    sel.innerHTML = '<option value="">Nessun ordine</option>';
+    return;
+  }
+  sel.innerHTML = sessionOrders.map(o =>
+    `<option value="${o.id}">${o.codice}</option>`
+  ).join('');
+  if (lastOrdineId) sel.value = lastOrdineId;
+}
+
+async function loadClienteOrdineById(ordineId) {
+  if (!ordineId || !sb) return;
+  lastOrdineId = ordineId;
+  const { data: o } = await sb.from('ordini').select('*').eq('id', ordineId).single();
+  if (!o) { toast('Ordine non trovato'); return; }
+  // items da jsonb o ordine_riga
+  let items = o.items || [];
+  if (!items.length) {
+    try {
+      const { data: righe } = await sb.from('ordine_riga').select('*').eq('id_ordine', ordineId);
+      items = (righe || []).map(r => ({
+        nome: r.piatto || r.nome,
+        qty: r.qty_piatti || r.qty || 1,
+        prezzo: r.prezzo_pagato && (r.qty_piatti || r.qty) ? Number(r.prezzo_pagato) / (r.qty_piatti || r.qty) : 0
+      }));
+    } catch (e) {}
+  }
+  $('#ricevuta-codice').textContent = o.codice || '';
+  $('#ricevuta-rist').textContent = (currentRistorante && currentRistorante.nome) || '';
+  $('#ricevuta-tavolo').textContent = o.tavolo;
+  $('#ricevuta-ora').textContent = formatTime(o.created_at || o.createdAt);
+  $('#ricevuta-pagamento').textContent = o.pagamento === 'cassa' ? 'Pago in cassa' : 'Carta';
+  $('#ricevuta-totale').textContent = formatPrice(o.totale || 0);
+  $('#ricevuta-stato').textContent = labelStato(o.stato);
+  $('#ricevuta-stato').className = 'badge-stato ' + (o.stato || 'nuovo');
+  const ps = o.stato_pagamento || defaultPagStato(o.pagamento);
+  if ($('#ricevuta-pag-stato')) {
+    $('#ricevuta-pag-stato').textContent = labelPagamentoStato(ps);
+    $('#ricevuta-pag-stato').className = 'badge-pag ' + ps;
+  }
+  $('#ricevuta-items').innerHTML = items.length
+    ? items.map(i => `<div class="r-item"><span>${i.qty}× ${i.nome}</span><span>${formatPrice((i.prezzo || 0) * (i.qty || 1))}</span></div>`).join('')
+    : '<p style="color:var(--muted)">Dettaglio piatti non disponibile</p>';
+  showClienteView('ricevuta');
+  startOrdineStatusPolling();
+}
+
+document.addEventListener('change', (e) => {
+  if (e.target && e.target.id === 'select-ordini-cliente') {
+    const id = e.target.value;
+    if (id) loadClienteOrdineById(id);
+  }
+});
+
 
 let _statusPoll = null;
 let _lastKnownStato = null;
@@ -1876,36 +2007,9 @@ $('#btn-indietro-stato')?.addEventListener('click', () => {
 
 
 // =====================================================
-// CREA ADMIN + RESET PASSWORD
+// RESET PASSWORD RISTORATORE
 // =====================================================
-$('#btn-crea-primo-admin')?.addEventListener('click', () => {
-  $('#form-crea-admin')?.reset();
-  $('#modal-crea-admin')?.classList.remove('hidden');
-});
-
-$('#form-crea-admin')?.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  if (!sb) { toast('Database non collegato: controlla config.js'); return; }
-  const email = ($('#admin-email')?.value || '').trim().toLowerCase();
-  const password = ($('#admin-password')?.value || '').trim();
-  const nome = ($('#admin-nome')?.value || '').trim() || 'Amministratore';
-  if (!email || !password) { toast('Email e password obbligatorie'); return; }
-
-  const { error } = await sb.from('utenti').insert({
-    email,
-    password_hash: password,
-    ruolo: 'admin',
-    nome
-  });
-  if (error) {
-    toast('Errore: ' + error.message);
-    console.error(error);
-    return;
-  }
-  $('#modal-crea-admin').classList.add('hidden');
-  toast('Admin creato! Accedi con email e password');
-  if ($('#login-email')) $('#login-email').value = email;
-});
+/* crea admin rimosso: solo da Supabase */
 
 window.apriResetPassword = async function(id) {
   if (!sb) { toast('Database non collegato'); return; }
