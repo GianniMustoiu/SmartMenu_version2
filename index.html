@@ -38,11 +38,8 @@
           <i class="fas fa-sign-in-alt"></i> Accedi
         </button>
         <p class="hint">
-          <strong>Admin:</strong> email e password dell'account creato (non basta la sola password generica)<br>
+          <strong>Admin:</strong> account creato da Supabase (tabella utenti)<br>
           <strong>Ristoratore:</strong> email e password del ristorante<br>
-          <button type="button" id="btn-crea-primo-admin" class="btn btn-secondary btn-sm" style="margin-top:10px">
-            <i class="fas fa-user-plus"></i> Crea account admin
-          </button>
         </p>
       </form>
     </div>
@@ -399,6 +396,10 @@
             <i class="fas fa-check-circle"></i>
             <h2>Ordine ricevuto</h2>
             <p>Codice: <strong id="ricevuta-codice"></strong></p>
+            <div class="form-group" style="margin:12px 0 0;text-align:left">
+              <label style="text-transform:none;letter-spacing:0;font-size:12px">I tuoi ordini a questo tavolo</label>
+              <select id="select-ordini-cliente" style="margin-top:6px"></select>
+            </div>
           </div>
           <div class="ricevuta-info">
             <p><strong id="ricevuta-rist"></strong></p>
@@ -719,36 +720,7 @@
       </form>
     </div>
   </div>
-
-  <!-- Modal crea admin -->
-  <div id="modal-crea-admin" class="modal hidden">
-    <div class="modal-content" style="max-width:420px">
-      <div class="modal-header">
-        <h3>Crea account admin</h3>
-        <button class="close-modal" data-modal="modal-crea-admin">&times;</button>
-      </div>
-      <form id="form-crea-admin">
-        <div class="form-group" style="padding:16px 24px 0">
-          <label>Nome</label>
-          <input type="text" id="admin-nome" placeholder="Nome amministratore" />
-        </div>
-        <div class="form-group" style="padding:0 24px">
-          <label>Email *</label>
-          <input type="email" id="admin-email" required placeholder="admin@esempio.it" />
-        </div>
-        <div class="form-group" style="padding:0 24px">
-          <label>Password *</label>
-          <input type="password" id="admin-password" required minlength="4" placeholder="Minimo 4 caratteri" />
-        </div>
-        <div class="modal-footer">
-          <button type="button" class="btn btn-secondary close-modal" data-modal="modal-crea-admin">Annulla</button>
-          <button type="submit" class="btn btn-primary">Crea admin</button>
-        </div>
-      </form>
-    </div>
-  </div>
-
-  <!-- Modal reset password ristoratore -->
+<!-- Modal reset password ristoratore -->
   <div id="modal-reset-pass" class="modal hidden">
     <div class="modal-content" style="max-width:420px">
       <div class="modal-header">
@@ -770,6 +742,29 @@
           <button type="button" class="btn btn-secondary close-modal" data-modal="modal-reset-pass">Annulla</button>
           <button type="button" id="btn-genera-pass" class="btn btn-secondary"><i class="fas fa-random"></i> Genera</button>
           <button type="submit" class="btn btn-primary">Salva password</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+
+  <!-- Modal sblocco gestione menu (admin) -->
+  <div id="modal-admin-menu-login" class="modal hidden">
+    <div class="modal-content" style="max-width:400px">
+      <div class="modal-header">
+        <h3>Sblocca gestione menu</h3>
+        <button class="close-modal" data-modal="modal-admin-menu-login">&times;</button>
+      </div>
+      <form id="form-admin-menu-login">
+        <input type="hidden" id="admin-menu-rist-id" />
+        <div class="form-group" style="padding:16px 24px">
+          <label>Password account admin *</label>
+          <input type="password" id="admin-menu-password" required minlength="4" placeholder="Password admin" autocomplete="current-password" />
+          <small style="color:var(--muted);display:block;margin-top:6px">Richiesta per accedere al menu del ristorante</small>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary close-modal" data-modal="modal-admin-menu-login">Annulla</button>
+          <button type="submit" class="btn btn-primary">Sblocca</button>
         </div>
       </form>
     </div>
