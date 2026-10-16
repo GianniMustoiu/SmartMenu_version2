@@ -163,13 +163,14 @@ async function enterAsRistoratore(r) {
       : 'Impossibile caricare i dati del ristorante');
     return false;
   }
-  if (window.OFFLINE) {
-    // ricorda l'accesso su questo dispositivo (niente password) per riaprire l'app anche offline
-    window.OFFLINE.saveSession({
-      role: 'ristoratore', ristoranteId: r.id || r.ristoranteId,
-      email: r.email, nome: currentRistorante.nome || r.nome || ''
-    });
-  }
+  // ricorda l'accesso su questo dispositivo (mai la password): dopo un ricaricamento
+  // l'app si riapre da sola, anche offline
+  const session = {
+    role: 'ristoratore', ristoranteId: currentRistorante.id,
+    email: r.email, nome: currentRistorante.nome || r.nome || ''
+  };
+  try { localStorage.setItem('menupro_session', JSON.stringify(session)); } catch (e) { console.warn('localStorage non disponibile', e); }
+  if (window.OFFLINE) window.OFFLINE.saveSession(session);
   $('#login-screen').classList.add('hidden');
   $('#app-ristoratore').classList.remove('hidden');
   $('#rist-nome-sidebar').textContent = (currentRistorante && currentRistorante.nome) || r.nome || 'Ristorante';
@@ -209,7 +210,7 @@ async function doLogin(email, pass) {
       }
       if (json.user.ruolo === 'ristoratore') {
         // se l'API non manda ristoranteId, cercalo per email
-        if (!json.user.ristoranteId && !json.user.id && sb) {
+        if (!json.user.ristoranteId && sb) {
           const { data: r } = await sb.from('ristoranti').select('*').eq('email', json.user.email).maybeSingle();
           if (r) return await enterAsRistoratore(r);
         }
@@ -290,6 +291,7 @@ $$('.logout-btn').forEach(btn => {
       if (!(await window.OFFLINE.beforeLogout())) return;
       await window.OFFLINE.onLogout();
     }
+    try { localStorage.removeItem('menupro_session'); } catch (e) {}
     stopOrdineStatusPolling();
     document.body.classList.remove('cliente-night');
     currentUser = null;
@@ -2174,15 +2176,27 @@ window.stampaOrdine = function(ordineId) {
 // Se questo dispositivo era già entrato come ristoratore, riapre direttamente l'app.
 // =====================================================
 (async function restoreSavedSession() {
-  const params = new URLSearchParams(window.location.search);
-  if (params.get('r') && params.get('t')) return;   // arrivo da QR = cliente
-  if (!window.OFFLINE) return;
+  const done = () => document.documentElement.classList.remove('restoring');
   try {
-    const s = await window.OFFLINE.loadSession();
-    if (s && s.role === 'ristoratore' && s.ristoranteId) {
-      await enterAsRistoratore({ id: s.ristoranteId, ristoranteId: s.ristoranteId, email: s.email, nome: s.nome });
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('r') && params.get('t')) return;   // arrivo da QR = cliente
+
+    let s = null;
+    try { s = JSON.parse(localStorage.getItem('menupro_session') || 'null'); } catch (e) {}
+    if (!s && window.OFFLINE) s = await window.OFFLINE.loadSession();
+    if (!s || s.role !== 'ristoratore' || !s.ristoranteId) return;
+
+    const ok = await enterAsRistoratore({
+      id: s.ristoranteId, ristoranteId: s.ristoranteId, email: s.email, nome: s.nome
+    });
+    // online ma il ristorante non esiste più: la sessione salvata non vale
+    if (!ok && navigator.onLine !== false) {
+      try { localStorage.removeItem('menupro_session'); } catch (e) {}
     }
   } catch (e) {
     console.error('Ripristino sessione fallito:', e);
+    toast('Non sono riuscito a riaprire la sessione: accedi di nuovo');
+  } finally {
+    done();
   }
 })();
