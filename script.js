@@ -4,23 +4,28 @@
 
 const cfg = window.MENUPRO_CONFIG || {};
 let sb = null;
-try {
-  if ((window.supabase || window.OFFLINE) && cfg.SUPABASE_URL && cfg.SUPABASE_ANON_KEY &&
-      !String(cfg.SUPABASE_ANON_KEY).includes('INCOLLA')) {
-    // OFFLINE.wrap(): stesso client di prima, ma con database locale e coda di sincronizzazione.
-    // Se la libreria Supabase non è disponibile (offline al primo avvio) funziona solo in locale.
-    const realClient = window.supabase
-      ? window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY,
-          window.OFFLINE ? { global: { fetch: window.OFFLINE.fetch } } : undefined)
-      : null;
-    sb = window.OFFLINE ? window.OFFLINE.wrap(realClient) : realClient;
-  } else {
-    console.warn('Supabase non configurato correttamente in config.js');
+
+function ensureSb() {
+  if (sb) return sb;
+  try {
+    const c = window.MENUPRO_CONFIG || cfg || {};
+    if (window.supabase && c.SUPABASE_URL && c.SUPABASE_ANON_KEY &&
+        !String(c.SUPABASE_ANON_KEY).includes('INCOLLA')) {
+      sb = window.supabase.createClient(c.SUPABASE_URL, c.SUPABASE_ANON_KEY);
+      window.sb = sb;
+    }
+  } catch (e) {
+    console.error('Errore init Supabase:', e);
   }
+  return sb;
+}
+
+try {
+  ensureSb();
 } catch (e) {
   console.error('Errore init Supabase:', e);
 }
-window.sb = sb; // per debug in console
+window.sb = sb;
 if (!sb) console.warn('ATTENZIONE: sb è null — controlla config.js');
 
 let currentUser = null;
@@ -77,16 +82,32 @@ async function loadRistoranti() {
   return data || [];
 }
 
-async function loadRistoranteFull(id) {
-  const { data: r, error } = await sb.from('ristoranti').select('*').eq('id', id).single();
-  if (error || !r) return null;
+async function loadRistoranteFull(id, opts) {
+  opts = opts || {};
+  const lite = !!opts.lite; // cliente QR: niente ordini/pagamenti
+  if (!sb) ensureSb();
+  if (!sb) return null;
+  const idClean = String(id || '').trim();
+  if (!idClean) return null;
+  const { data: r, error } = await sb.from('ristoranti').select('*').eq('id', idClean).maybeSingle();
+  if (error) { console.error('loadRistoranteFull', idClean, error); return null; }
+  if (!r) return null;
+
+  const ordiniQ = lite
+    ? Promise.resolve({ data: [] })
+    : sb.from('ordini').select('*').eq('id_ristorante', id)
+        .order('created_at', { ascending: false })
+        .limit(120);
+  const pagQ = lite
+    ? Promise.resolve({ data: [] })
+    : sb.from('pagamenti_abbonamento').select('*').eq('id_ristorante', id).order('data', { ascending: false }).limit(50);
 
   const [tavoli, piatti, categorie, ordini, pagamenti] = await Promise.all([
     sb.from('tavoli').select('*').eq('id_ristorante', id).order('numero'),
     sb.from('piatti').select('*').eq('id_ristorante', id).order('nome'),
     sb.from('categorie').select('*').eq('id_ristorante', id).order('posizione'),
-    sb.from('ordini').select('*').eq('id_ristorante', id).order('created_at', { ascending: false }),
-    sb.from('pagamenti_abbonamento').select('*').eq('id_ristorante', id).order('data', { ascending: false })
+    ordiniQ,
+    pagQ
   ]);
 
   r.tavoli = tavoli.data || [];
@@ -101,8 +122,8 @@ async function loadRistoranteFull(id) {
     items: o.items || [],
     createdAt: o.created_at
   }));
-  // se items vuoti, prova ordine_riga in batch leggero
-  const needRows = r.ordini.filter(o => !(o.items && o.items.length));
+  // solo per ordini attivi senza items (max 40) – evita query enormi
+  const needRows = r.ordini.filter(o => !(o.items && o.items.length) && o.stato !== 'chiuso' && o.stato !== 'consegnato').slice(0, 40);
   if (needRows.length && sb) {
     try {
       const ids = needRows.map(o => o.id);
@@ -113,7 +134,7 @@ async function loadRistoranteFull(id) {
           (byOrd[row.id_ordine] = byOrd[row.id_ordine] || []).push({
             nome: row.piatto || row.nome || 'Piatto',
             qty: row.qty_piatti || row.qty || 1,
-            prezzo: 0
+            prezzo: Number(row.prezzo_pagato) || 0
           });
         });
         r.ordini.forEach(o => {
@@ -153,31 +174,17 @@ async function enterAsAdmin(email) {
 }
 
 async function enterAsRistoratore(r) {
-  // il ruolo va impostato PRIMA di caricare i dati: serve a salvarli per l'uso offline
-  currentUser = { role: 'ristoratore', email: r.email, ristoranteId: r.id || r.ristoranteId };
   currentRistorante = await loadRistoranteFull(r.id || r.ristoranteId);
-  if (!currentRistorante) {
-    currentUser = null;
-    toast(navigator.onLine === false
-      ? 'Sei offline e i dati del ristorante non sono ancora salvati su questo dispositivo'
-      : 'Impossibile caricare i dati del ristorante');
-    return false;
-  }
-  if (window.OFFLINE) {
-    // ricorda l'accesso su questo dispositivo (niente password) per riaprire l'app anche offline
-    window.OFFLINE.saveSession({
-      role: 'ristoratore', ristoranteId: r.id || r.ristoranteId,
-      email: r.email, nome: currentRistorante.nome || r.nome || ''
-    });
-  }
+  currentUser = { role: 'ristoratore', email: r.email, ristoranteId: r.id || r.ristoranteId };
   $('#login-screen').classList.add('hidden');
   $('#app-ristoratore').classList.remove('hidden');
   $('#rist-nome-sidebar').textContent = (currentRistorante && currentRistorante.nome) || r.nome || 'Ristorante';
   $('#rist-user-email').textContent = r.email;
-  await renderRistDashboard();
-  await renderMenuTable();
-  await renderOrdiniKanban();
-  await renderTavoli();
+  // dati già caricati: non ricaricare 4 volte
+  await renderRistDashboard(false);
+  await renderMenuTable('', false);
+  await renderOrdiniKanban(false);
+  await renderTavoli(false);
   return true;
 }
 
@@ -187,11 +194,6 @@ async function doLogin(email, pass) {
 
   if (!pass) {
     toast('Inserisci la password');
-    return false;
-  }
-
-  if (navigator.onLine === false) {
-    toast('Sei offline: il primo accesso richiede la connessione. Se avevi già effettuato l\'accesso su questo dispositivo, riapri l\'app.');
     return false;
   }
 
@@ -284,18 +286,16 @@ $('#login-form').addEventListener('submit', async (e) => {
 // LOGOUT
 // =====================================================
 $$('.logout-btn').forEach(btn => {
-  btn.addEventListener('click', async () => {
-    // se ci sono modifiche non ancora inviate chiede conferma; poi svuota i dati locali
-    if (window.OFFLINE) {
-      if (!(await window.OFFLINE.beforeLogout())) return;
-      await window.OFFLINE.onLogout();
-    }
-    stopOrdineStatusPolling();
+  btn.addEventListener('click', () => {
+    if (typeof stopOrdineStatusPolling === 'function') stopOrdineStatusPolling();
+    if (typeof stopOrdiniPolling === 'function') stopOrdiniPolling();
+    try { localStorage.removeItem('mp_session'); } catch (_) {}
     document.body.classList.remove('cliente-night');
     currentUser = null;
     currentRistorante = null;
     cart = [];
     lastOrdineId = null;
+    sessionOrders = [];
     $('#app-admin').classList.add('hidden');
     $('#app-ristoratore').classList.add('hidden');
     $('#app-cliente').classList.add('hidden');
@@ -976,18 +976,23 @@ $('#btn-avvia-demo')?.addEventListener('click', async () => {
   const tavolo = parseInt($('#demo-tavolo').value) || 1;
   const r = await loadRistoranteFull(ristId);
   if (!r) return;
-  currentUser = { role: 'cliente', ristoranteId: ristId, tavolo };
+  // Demo da ADMIN: NON sovrascrivere sessione → al refresh torni in ADMIN
+  currentUser = { role: 'cliente', ristoranteId: ristId, tavolo, fromAdminDemo: true };
   currentRistorante = r;
   cart = [];
   lastOrdineId = null;
+  sessionOrders = [];
   $('#modal-demo-utente').classList.add('hidden');
   $('#app-admin').classList.add('hidden');
+  $('#app-ristoratore')?.classList.add('hidden');
+  $('#login-screen')?.classList.add('hidden');
   $('#app-cliente').classList.remove('hidden');
   $('#cliente-rist-nome').textContent = r.nome;
   $('#cliente-tavolo-num').textContent = tavolo;
   document.body.classList.add('cliente-night');
   showClienteView('menu');
   renderClienteMenu();
+  if (typeof setupClientePagamenti === 'function') setupClientePagamenti();
 });
 
 // =====================================================
@@ -1027,9 +1032,11 @@ $$('.period-btn').forEach(btn => {
   });
 });
 
-async function renderRistDashboard() {
+async function renderRistDashboard(forceReload) {
   if (!currentRistorante) return;
-  currentRistorante = await loadRistoranteFull(currentRistorante.id);
+  if (forceReload !== false) {
+    currentRistorante = await loadRistoranteFull(currentRistorante.id);
+  }
   const menu = currentRistorante.menu || [];
   const ordini = currentRistorante.ordini || [];
   const tavoli = currentRistorante.tavoli || [];
@@ -1103,9 +1110,11 @@ function renderRistCharts() {
 // =====================================================
 // MENU
 // =====================================================
-async function renderMenuTable(filter = '') {
+async function renderMenuTable(filter = '', forceReload) {
   if (!currentRistorante) return;
-  currentRistorante = await loadRistoranteFull(currentRistorante.id);
+  if (forceReload !== false) {
+    currentRistorante = await loadRistoranteFull(currentRistorante.id);
+  }
   let menu = currentRistorante.menu || [];
 
   // chips categorie
@@ -1312,9 +1321,11 @@ window.deletePiatto = async function(id) {
 // =====================================================
 // ORDINI KANBAN
 // =====================================================
-async function renderOrdiniKanban() {
+async function renderOrdiniKanban(forceReload) {
   if (!currentRistorante) return;
-  currentRistorante = await loadRistoranteFull(currentRistorante.id);
+  if (forceReload !== false) {
+    currentRistorante = await loadRistoranteFull(currentRistorante.id);
+  }
   const ordini = currentRistorante.ordini || [];
 
   const nuovi = ordini.filter(o => o.stato === 'nuovo');
@@ -1326,14 +1337,12 @@ async function renderOrdiniKanban() {
   $('#count-pronto').textContent = pronti.length;
 
   function cardHtml(o) {
-    const pend = (window.OFFLINE && window.OFFLINE.isPending('ordini', o.id))
-      ? '<span class="pending-badge" title="In attesa di sincronizzazione"><i class="fas fa-clock"></i></span>' : '';
     const items = (o.items || []).slice(0, 3).map(i => `${i.qty}× ${i.nome}`).join(', ');
     const more = (o.items || []).length > 3 ? '...' : '';
     const ps = o.stato_pagamento || defaultPagStato(o.pagamento);
     return `
-      <div class="kanban-card stato-${o.stato}" onclick="apriDettaglioOrdine('${o.id}')">
-        <h4>Tavolo ${o.tavolo} · ${formatPrice(o.totale)} ${pend}</h4>
+      <div class="kanban-card stato-${o.stato}" data-id="${o.id}" draggable="true" onclick="apriDettaglioOrdine('${o.id}')">
+        <h4>Tavolo ${o.tavolo} · ${formatPrice(o.totale)}</h4>
         <p>${items}${more}</p>
         <div class="pag-row">
           <span style="font-size:11px;color:var(--muted)">${formatTime(o.createdAt)} · #${o.codice}</span>
@@ -1401,7 +1410,6 @@ window.apriDettaglioOrdine = async function(ordineId) {
   const nextPag = { in_attesa: 'pagato', pagato: 'non_pagato', non_pagato: 'in_attesa' }[ps] || 'pagato';
   const pagBtnLabel = { pagato: 'Segna pagato', non_pagato: 'Segna non pagato', in_attesa: 'Segna in attesa' }[nextPag];
   actions += `<button class="btn btn-secondary" onclick="togglePagamento('${o.id}')"><i class="fas fa-money-bill-wave"></i> ${pagBtnLabel}</button>`;
-  actions += `<button class="btn btn-secondary" onclick="stampaOrdine('${o.id}')"><i class="fas fa-print"></i> Stampa</button>`;
   if (o.stato !== 'chiuso') {
     actions += `<button class="btn btn-danger" onclick="chiudiConto('${o.id}')"><i class="fas fa-file-invoice-dollar"></i> Chiudi conto</button>`;
   }
@@ -1479,13 +1487,17 @@ document.addEventListener('pointermove', (e) => {
 // TAVOLI + QR (URL reali)
 // =====================================================
 function qrData(ristoranteId, tavolo) {
-  const base = (cfg.SITE_URL || window.location.origin).replace(/\/$/, '');
-  return `${base}/?r=${ristoranteId}&t=${tavolo}`;
+  // SITE_URL produzione, altrimenti origin corrente
+  const site = (cfg && cfg.SITE_URL) || (window.MENUPRO_CONFIG && window.MENUPRO_CONFIG.SITE_URL) || '';
+  const base = (site || window.location.origin || '').replace(/\/$/, '');
+  return base + '/?r=' + encodeURIComponent(String(ristoranteId)) + '&t=' + encodeURIComponent(String(tavolo));
 }
 
-async function renderTavoli() {
+async function renderTavoli(forceReload) {
   if (!currentRistorante) return;
-  currentRistorante = await loadRistoranteFull(currentRistorante.id);
+  if (forceReload !== false) {
+    currentRistorante = await loadRistoranteFull(currentRistorante.id);
+  }
   const sale = currentRistorante.sale || ['Sala principale'];
   const tavoli = currentRistorante.tavoli || [];
 
@@ -1825,45 +1837,16 @@ $('#btn-invia-ordine')?.addEventListener('click', async () => {
     return;
   }
 
-  // salva righe ordine se la tabella esiste
-  try {
-    const righe = cart.map(c => ({
-      id_ordine: inserted.id,
-      id_piatto: c.id || null,
-      piatto: c.nome,
-      qty_piatti: c.qty,
-      prezzo_pagato: Number(c.prezzo) * c.qty
-    }));
-    await sb.from('ordine_riga').insert(righe);
-  } catch (e) { console.warn('ordine_riga skip', e); }
-
-  try {
-    if (note) await sb.from('messaggio').insert({ id_ordine: inserted.id, testo: note });
-  } catch (e) { console.warn('messaggio skip', e); }
-
-  try {
-    await sb.from('pagamento').insert({
-      id_ordine: inserted.id,
-      metodo: pagamento,
-      importo: totale
-    });
-  } catch (e) { console.warn('pagamento skip', e); }
-
-
-  await sb.from('tavoli').update({ occupato: true })
-    .eq('id_ristorante', currentRistorante.id)
-    .eq('numero', currentUser.tavolo);
-
+  // UI subito dopo insert principale
+  const cartSnapshot = cart.slice();
   lastOrdineId = inserted.id;
   if (!sessionOrders.find(x => x.id === inserted.id)) {
     sessionOrders.push({ id: inserted.id, codice });
   }
-  updateClienteOrdiniSelect();
-
   $('#ricevuta-codice').textContent = codice;
   $('#ricevuta-rist').textContent = currentRistorante.nome;
   $('#ricevuta-tavolo').textContent = currentUser.tavolo;
-  $('#ricevuta-ora').textContent = formatTime(inserted.created_at);
+  $('#ricevuta-ora').textContent = formatTime(inserted.created_at || new Date().toISOString());
   $('#ricevuta-pagamento').textContent = pagamento === 'cassa' ? 'Pago in cassa' : 'Carta';
   $('#ricevuta-totale').textContent = formatPrice(totale);
   $('#ricevuta-stato').textContent = 'Nuovo';
@@ -1872,19 +1855,31 @@ $('#btn-invia-ordine')?.addEventListener('click', async () => {
     $('#ricevuta-pag-stato').textContent = labelPagamentoStato(stato_pagamento);
     $('#ricevuta-pag-stato').className = 'badge-pag ' + stato_pagamento;
   }
-  $('#ricevuta-items').innerHTML = cart.map(i => `
+  $('#ricevuta-items').innerHTML = cartSnapshot.map(i => `
     <div class="r-item"><span>${i.qty}× ${i.nome}</span><span>${formatPrice(i.prezzo * i.qty)}</span></div>
   `).join('');
 
   cart = [];
   updateCartCount();
-  $('#ordine-note').value = '';
+  if ($('#ordine-note')) $('#ordine-note').value = '';
   showClienteView('ricevuta');
-  $('#cliente-stato-btn').style.display = 'inline-flex';
+  if ($('#cliente-stato-btn')) $('#cliente-stato-btn').style.display = 'inline-flex';
+  updateClienteOrdiniSelect();
   startOrdineStatusPolling();
-  toast(window.OFFLINE && window.OFFLINE.pendingCount() > 0
-    ? 'Ordine salvato: verrà inviato appena torna la connessione'
-    : 'Ordine inviato!');
+  toast('Ordine inviato!');
+
+  Promise.all([
+    sb.from('ordine_riga').insert(cartSnapshot.map(c => ({
+      id_ordine: inserted.id,
+      id_piatto: c.id || null,
+      piatto: c.nome,
+      qty_piatti: c.qty,
+      prezzo_pagato: Number(c.prezzo) * c.qty
+    }))).catch(() => {}),
+    note ? sb.from('messaggio').insert({ id_ordine: inserted.id, testo: note }).catch(() => {}) : Promise.resolve(),
+    sb.from('pagamento').insert({ id_ordine: inserted.id, metodo: pagamento, importo: totale }).catch(() => {}),
+    sb.from('tavoli').update({ occupato: true }).eq('id_ristorante', currentRistorante.id).eq('numero', currentUser.tavolo).catch(() => {})
+  ]).catch(() => {});
 });
 
 
@@ -2097,92 +2092,1122 @@ $('#form-reset-pass')?.addEventListener('submit', async (e) => {
 // =====================================================
 (async function initFromQR() {
   const params = new URLSearchParams(window.location.search);
-  const rId = params.get('r');
+  let rId = (params.get('r') || '').trim();
+  try { rId = decodeURIComponent(rId); } catch (_) {}
+  rId = (rId || '').trim();
   const t = parseInt(params.get('t'), 10);
-  if (!rId || !t) return;
+  if (!rId || !t || Number.isNaN(t)) return;
 
-  // Nascondi subito il login (anche se il DB è lento)
   document.documentElement.classList.add('qr-entry');
   const login = $('#login-screen');
   const appC = $('#app-cliente');
   if (login) login.classList.add('hidden');
   if (appC) { appC.classList.remove('hidden'); appC.classList.add('cliente-ui'); }
   document.body.classList.add('cliente-night');
+  if ($('#cliente-tavolo-num')) $('#cliente-tavolo-num').textContent = t;
 
-  // ruolo impostato prima del caricamento: serve a salvare il menu per l'uso offline
-  currentUser = { role: 'cliente', ristoranteId: rId, tavolo: t };
+  // Attendi Supabase (CDN + config)
+  let tries = 0;
+  while (!ensureSb() && tries < 60) {
+    await new Promise(r => setTimeout(r, 100));
+    tries++;
+  }
+  if (!sb) {
+    toast('Database non collegato. Ricarica la pagina o controlla la connessione.');
+    console.error('QR: sb null dopo wait. supabase=', !!window.supabase, 'config=', !!window.MENUPRO_CONFIG);
+    return;
+  }
 
   try {
-    let r = null;
-    if (sb) r = await loadRistoranteFull(rId);
-    if (!r) {
-      toast('Ristorante non trovato o database non collegato');
+    // 1) lookup diretto leggero
+    let { data: raw, error } = await sb.from('ristoranti').select('*').eq('id', rId).maybeSingle();
+    if (error) {
+      console.error('QR select error', error);
+      // retry una volta
+      await new Promise(x => setTimeout(x, 300));
+      ({ data: raw, error } = await sb.from('ristoranti').select('*').eq('id', rId).maybeSingle());
+    }
+    if (!raw) {
+      // fallback: lista e match case-insensitive
+      const { data: all } = await sb.from('ristoranti').select('id,nome').limit(200);
+      const found = (all || []).find(x => String(x.id).toLowerCase() === rId.toLowerCase());
+      if (found) {
+        ({ data: raw } = await sb.from('ristoranti').select('*').eq('id', found.id).maybeSingle());
+      }
+    }
+    if (!raw) {
+      toast('Ristorante non trovato. Rigenera il QR dai Tavoli.');
+      console.error('QR id non trovato', rId);
       return;
     }
-    currentUser = { role: 'cliente', ristoranteId: rId, tavolo: t };
+
+    let r = await loadRistoranteFull(raw.id, { lite: true });
+    if (!r) {
+      // costruisci minimo senza full load
+      r = {
+        ...raw,
+        tavoli: [],
+        menu: [],
+        categorie: ['Antipasti', 'Primi', 'Secondi', 'Dolci', 'Bevande'],
+        ordini: [],
+        pagamenti: [],
+        sale: raw.sale || ['Sala principale']
+      };
+      try {
+        const [tavoli, piatti, categorie] = await Promise.all([
+          sb.from('tavoli').select('*').eq('id_ristorante', raw.id).order('numero'),
+          sb.from('piatti').select('*').eq('id_ristorante', raw.id).order('nome'),
+          sb.from('categorie').select('*').eq('id_ristorante', raw.id).order('posizione')
+        ]);
+        r.tavoli = tavoli.data || [];
+        r.menu = (piatti.data || []).map(p => ({ ...p, allergeni: p.allergeni || [] }));
+        r.categorie = (categorie.data || []).map(c => c.nome);
+        if (!r.categorie.length) r.categorie = ['Antipasti', 'Primi', 'Secondi', 'Dolci', 'Bevande'];
+      } catch (e2) { console.warn('QR lite partial', e2); }
+    }
+
+    currentUser = { role: 'cliente', ristoranteId: raw.id, tavolo: t, fromQR: true };
     currentRistorante = r;
-    cart = [];
-    lastOrdineId = null;
-    document.body.classList.add('cliente-night');
+    try {
+      const prev = JSON.parse(localStorage.getItem('mp_session') || 'null');
+      if (prev && prev.role === 'cliente' && prev.fromQR && prev.ristoranteId === raw.id && String(prev.tavolo) === String(t)) {
+        lastOrdineId = prev.lastOrdineId || null;
+        sessionOrders = Array.isArray(prev.sessionOrders) ? prev.sessionOrders : [];
+        cart = Array.isArray(prev.cart) ? prev.cart : [];
+      } else {
+        cart = []; lastOrdineId = null; sessionOrders = [];
+      }
+    } catch (_) { cart = []; lastOrdineId = null; sessionOrders = []; }
+
     if ($('#cliente-rist-nome')) $('#cliente-rist-nome').textContent = r.nome;
     if ($('#cliente-tavolo-num')) $('#cliente-tavolo-num').textContent = t;
-    showClienteView('menu');
+    showClienteView(lastOrdineId ? 'ricevuta' : 'menu');
     renderClienteMenu();
+    if (typeof setupClientePagamenti === 'function') setupClientePagamenti();
+    if (typeof ensureGeoOnCliente === 'function') ensureGeoOnCliente();
+    if (lastOrdineId) {
+      if (typeof updateClienteOrdiniSelect === 'function') updateClienteOrdiniSelect();
+      if (typeof startOrdineStatusPolling === 'function') startOrdineStatusPolling();
+    }
+    if (typeof saveSession === 'function') saveSession();
   } catch (e) {
     console.error('QR init error:', e);
-    toast('Errore apertura menu da QR');
+    toast('Errore apertura menu da QR: ' + (e.message || e));
   }
 })();
 
-
 // =====================================================
-// STAMPA COMANDA / RICEVUTA (funziona anche offline)
+// ESTENSIONI MenuPro v2 – offline, multi-rist, geo, drag,
+// pagamenti, chiusura fiscale, PDF, stampa, polling
 // =====================================================
-function escapeHtml(v) {
-  return String(v == null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-}
 
-window.stampaOrdine = function(ordineId) {
-  const o = currentRistorante && (currentRistorante.ordini || []).find(x => x.id === ordineId);
-  if (!o) return;
-  const ps = o.stato_pagamento || defaultPagStato(o.pagamento);
-  const metodo = o.pagamento === 'cassa' ? 'Pago in cassa' : (o.pagamento === 'carta' ? 'Carta' : (o.pagamento || '—'));
-  const righe = (o.items || []).map(i =>
-    `<tr><td class="q">${escapeHtml(i.qty)}×</td><td>${escapeHtml(i.nome)}</td></tr>`).join('');
-  let area = document.getElementById('print-area');
-  if (!area) {
-    area = document.createElement('div');
-    area.id = 'print-area';
-    document.body.appendChild(area);
-  }
-  area.innerHTML = `
-    <h2>${escapeHtml(currentRistorante.nome)}</h2>
-    <p class="big">Tavolo ${escapeHtml(o.tavolo)}</p>
-    <p>Ordine #${escapeHtml(o.codice)} · ${escapeHtml(formatTime(o.createdAt))}</p>
-    <hr>
-    <table>${righe || '<tr><td>Nessun piatto</td></tr>'}</table>
-    ${o.note ? `<hr><p>Note: ${escapeHtml(o.note)}</p>` : ''}
-    <hr>
-    <p class="tot">Totale ${escapeHtml(formatPrice(o.totale))}</p>
-    <p>${escapeHtml(metodo)} – ${escapeHtml(labelPagamentoStato(ps))}</p>
-  `;
-  window.print();
+const CIRCUITI_LABEL = {
+  visa: 'Visa', mastercard: 'Mastercard', satispay: 'Satispay',
+  paypal: 'PayPal', amex: 'American Express', applepay: 'Apple Pay'
 };
 
-// =====================================================
-// RIAPERTURA SESSIONE (anche offline)
-// Se questo dispositivo era già entrato come ristoratore, riapre direttamente l'app.
-// =====================================================
-(async function restoreSavedSession() {
-  const params = new URLSearchParams(window.location.search);
-  if (params.get('r') && params.get('t')) return;   // arrivo da QR = cliente
-  if (!window.OFFLINE) return;
-  try {
-    const s = await window.OFFLINE.loadSession();
-    if (s && s.role === 'ristoratore' && s.ristoranteId) {
-      await enterAsRistoratore({ id: s.ristoranteId, ristoranteId: s.ristoranteId, email: s.email, nome: s.nome });
+let userRistoranti = [];       // lista ristoranti accessibili
+let offlineQueue = [];         // { type, payload, ts }
+let geoOk = false;
+let _ordiniPoll = null;
+let _lastOrdiniHash = '';
+
+// ---- Offline queue (localStorage) ----
+function loadOfflineQueue() {
+  try { offlineQueue = JSON.parse(localStorage.getItem('mp_offline_q') || '[]'); } catch (e) { offlineQueue = []; }
+}
+function saveOfflineQueue() {
+  localStorage.setItem('mp_offline_q', JSON.stringify(offlineQueue));
+}
+function enqueueOffline(type, payload) {
+  offlineQueue.push({ type, payload, ts: Date.now() });
+  saveOfflineQueue();
+  const b = $('#offline-badge');
+  if (b) b.classList.remove('hidden');
+}
+
+async function flushOfflineQueue() {
+  if (!sb || !navigator.onLine || !offlineQueue.length) return;
+  const q = [...offlineQueue];
+  offlineQueue = [];
+  saveOfflineQueue();
+  for (const item of q) {
+    try {
+      if (item.type === 'update_stato') {
+        await sb.from('ordini').update({ stato: item.payload.stato }).eq('id', item.payload.id);
+        if (item.payload.stato === 'pronto') tryPrintComanda(item.payload.id);
+      } else if (item.type === 'update_pag') {
+        await sb.from('ordini').update({ stato_pagamento: item.payload.stato_pagamento }).eq('id', item.payload.id);
+      }
+    } catch (e) {
+      offlineQueue.push(item);
     }
-  } catch (e) {
-    console.error('Ripristino sessione fallito:', e);
   }
+  saveOfflineQueue();
+  const b = $('#offline-badge');
+  if (b) b.classList.toggle('hidden', offlineQueue.length === 0);
+  if (currentRistorante && currentUser?.role !== 'cliente') {
+    currentRistorante = await loadRistoranteFull(currentRistorante.id);
+    if (typeof renderOrdiniKanban === 'function') await renderOrdiniKanban();
+  }
+}
+
+window.addEventListener('online', () => {
+  const b = $('#offline-badge');
+  if (b) b.classList.add('hidden');
+  flushOfflineQueue();
+  toast('Connessione ripristinata – sincronizzazione...');
+});
+window.addEventListener('offline', () => {
+  const b = $('#offline-badge');
+  if (b) b.classList.remove('hidden');
+  toast('Sei offline – le modifiche verranno sincronizzate');
+});
+loadOfflineQueue();
+
+// Cache ristorante in IndexedDB-like (localStorage per semplicità)
+function cacheRistoranteLocal(r) {
+  if (!r || !r.id) return;
+  try {
+    localStorage.setItem('mp_cache_rist_' + r.id, JSON.stringify({
+      ...r,
+      _cachedAt: Date.now()
+    }));
+  } catch (e) {}
+}
+function getCachedRistorante(id) {
+  try {
+    const raw = localStorage.getItem('mp_cache_rist_' + id);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) { return null; }
+}
+
+// Override loadRistoranteFull soft-fail offline (preserva opts.lite)
+const _origLoadRist = loadRistoranteFull;
+loadRistoranteFull = async function (id, opts) {
+  ensureSb();
+  if ((!navigator.onLine || !sb) && typeof getCachedRistorante === 'function') {
+    const c = getCachedRistorante(id);
+    if (c) { toast('Modalità offline – dati in cache'); return c; }
+  }
+  try {
+    const r = await _origLoadRist(id, opts);
+    if (r && typeof cacheRistoranteLocal === 'function') cacheRistoranteLocal(r);
+    return r;
+  } catch (e) {
+    if (typeof getCachedRistorante === 'function') {
+      const c = getCachedRistorante(id);
+      if (c) return c;
+    }
+    console.warn('loadRistoranteFull error', e);
+    return null;
+  }
+};
+
+// ---- Multi-ristorante + staff ----
+async function loadUserRistoranti(user) {
+  if (!sb || !user) return [];
+  if (user.ruolo === 'admin') {
+    return await loadRistoranti();
+  }
+  // via utenti_ristoranti
+  const { data: links } = await sb.from('utenti_ristoranti')
+    .select('id_ristorante, ruolo_locale, ristoranti(*)')
+    .eq('id_utente', user.id);
+  if (links && links.length) {
+    return links.map(l => ({ ...l.ristoranti, _ruolo_locale: l.ruolo_locale })).filter(Boolean);
+  }
+  // fallback: email match
+  const { data: byEmail } = await sb.from('ristoranti').select('*').eq('email', user.email);
+  return byEmail || [];
+}
+
+function applyStaffNav(isStaff) {
+  $$('#rist-nav .nav-full').forEach(el => {
+    el.style.display = isStaff ? 'none' : '';
+  });
+  if (isStaff) {
+    const ordNav = document.querySelector('#rist-nav .nav-item[data-page="rist-ordini"]');
+    if (ordNav) ordNav.click();
+  }
+}
+
+function populateRistSwitcher() {
+  const wrap = $('#rist-switcher-wrap');
+  const sel = $('#rist-switcher');
+  if (!wrap || !sel) return;
+  if (userRistoranti.length <= 1) {
+    wrap.classList.add('hidden');
+    return;
+  }
+  wrap.classList.remove('hidden');
+  sel.innerHTML = userRistoranti.map(r =>
+    `<option value="${r.id}" ${currentRistorante && r.id === currentRistorante.id ? 'selected' : ''}>${r.nome}</option>`
+  ).join('');
+}
+
+$('#rist-switcher')?.addEventListener('change', async (e) => {
+  const id = e.target.value;
+  const r = userRistoranti.find(x => x.id === id);
+  if (!r) return;
+  currentRistorante = await loadRistoranteFull(id);
+  currentUser.ristoranteId = id;
+  $('#rist-nome-sidebar').textContent = currentRistorante.nome;
+  await renderRistDashboard();
+  await renderMenuTable();
+  await renderOrdiniKanban();
+  await renderTavoli();
+  if (typeof renderChiusuraFiscale === 'function') await renderChiusuraFiscale();
+  toast('Ristorante: ' + currentRistorante.nome);
+});
+
+// Patch enterAsRistoratore
+const _origEnterRist = enterAsRistoratore;
+enterAsRistoratore = async function (r) {
+  // se arriva da login con user object
+  if (r && r.ruolo === 'staff') {
+    currentUser = { role: 'staff', email: r.email, id: r.id, ristoranteId: r.ristoranteId };
+  }
+  const ok = await _origEnterRist(r);
+  if (currentUser && currentUser.role !== 'cliente') {
+    const uRow = await sb?.from('utenti').select('*').eq('email', currentUser.email).maybeSingle();
+    if (uRow?.data) {
+      currentUser.id = uRow.data.id;
+      currentUser.ruolo = uRow.data.ruolo;
+      userRistoranti = await loadUserRistoranti(uRow.data);
+      if (!userRistoranti.length && currentRistorante) userRistoranti = [currentRistorante];
+      populateRistSwitcher();
+      applyStaffNav(uRow.data.ruolo === 'staff' || (userRistoranti[0]?._ruolo_locale === 'staff'));
+    }
+  }
+  startOrdiniPolling();
+  return ok;
+};
+
+// ---- Polling silenzioso ordini ogni 3s ----
+function startOrdiniPolling() {
+  stopOrdiniPolling();
+  _ordiniPoll = setInterval(async () => {
+    if (!currentRistorante || !sb || !navigator.onLine) return;
+    if (currentUser?.role === 'cliente') return;
+    try {
+      const { data } = await sb.from('ordini')
+        .select('id,stato,stato_pagamento,totale,codice,tavolo,created_at')
+        .eq('id_ristorante', currentRistorante.id)
+        .order('created_at', { ascending: false })
+        .limit(80);
+      const hash = JSON.stringify((data || []).map(o => o.id + o.stato + o.stato_pagamento));
+      if (hash !== _lastOrdiniHash) {
+        _lastOrdiniHash = hash;
+        // merge leggero senza ricaricare menu/tavoli interi
+        if (currentRistorante && data) {
+          const byId = {};
+          (currentRistorante.ordini || []).forEach(o => { byId[o.id] = o; });
+          currentRistorante.ordini = data.map(o => {
+            const prev = byId[o.id];
+            return {
+              ...(prev || {}),
+              ...o,
+              items: (prev && prev.items) || o.items || [],
+              createdAt: o.created_at
+            };
+          });
+        }
+        const onOrdini = !$('#page-rist-ordini')?.classList.contains('hidden');
+        const onDash = !$('#page-rist-dashboard')?.classList.contains('hidden');
+        if (onOrdini) await renderOrdiniKanban(false);
+        if (onDash) await renderRistDashboard(false);
+        const n = (data || []).filter(o => o.stato === 'nuovo').length;
+        const badge = $('#badge-ordini');
+        if (badge) {
+          badge.textContent = n;
+          badge.classList.toggle('hidden', n === 0);
+        }
+      }
+    } catch (e) { /* silenzioso */ }
+  }, 5000);
+}
+function stopOrdiniPolling() {
+  if (_ordiniPoll) { clearInterval(_ordiniPoll); _ordiniPoll = null; }
+}
+
+// ---- Geo anti-truffa ----
+function haversineM(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const toRad = d => d * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+function requestGeoForOrder() {
+  return new Promise((resolve) => {
+    if (!currentRistorante?.lat || !currentRistorante?.lng) {
+      // se non configurato, permettere (admin deve impostare lat/lng)
+      geoOk = true;
+      resolve(true);
+      return;
+    }
+    if (!navigator.geolocation) {
+      toast('Geolocalizzazione non supportata');
+      resolve(false);
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const dist = haversineM(
+          pos.coords.latitude, pos.coords.longitude,
+          currentRistorante.lat, currentRistorante.lng
+        );
+        const raggio = currentRistorante.raggio_metri || 250;
+        if (dist <= raggio) {
+          geoOk = true;
+          $('#geo-banner')?.classList.add('hidden');
+          resolve(true);
+        } else {
+          geoOk = false;
+          toast('Sei troppo lontano dal ristorante (' + Math.round(dist) + ' m). Ordine non consentito.');
+          resolve(false);
+        }
+      },
+      () => {
+        toast('Posizione negata: non puoi ordinare da remoto');
+        resolve(false);
+      },
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 60000 }
+    );
+  });
+}
+
+$('#btn-geo-ok')?.addEventListener('click', async () => {
+  const ok = await requestGeoForOrder();
+  if (ok) toast('Posizione confermata – puoi ordinare');
+});
+
+// Mostra banner geo all'ingresso cliente
+const _origInitQR = null; // already ran; hook showCliente
+function ensureGeoOnCliente() {
+  if (!currentRistorante) return;
+  if (currentRistorante.lat && currentRistorante.lng) {
+    geoOk = false;
+    $('#geo-banner')?.classList.remove('hidden');
+  } else {
+    geoOk = true;
+    $('#geo-banner')?.classList.add('hidden');
+  }
+}
+
+// Patch invio ordine: geo + circuiti + pagamento config
+const inviaBtn = $('#btn-invia-ordine');
+if (inviaBtn) {
+  const newHandler = async (e) => {
+    e?.preventDefault?.();
+    if (!cart.length) { toast('Il carrello è vuoto'); return; }
+    if (!geoOk) {
+      const ok = await requestGeoForOrder();
+      if (!ok) return;
+    }
+    // prosegui con logica originale via click programmato non possibile: reimplementa core
+    await inviaOrdineCliente();
+  };
+  inviaBtn.replaceWith(inviaBtn.cloneNode(true));
+  $('#btn-invia-ordine')?.addEventListener('click', newHandler);
+}
+
+async function inviaOrdineCliente() {
+  if (!cart.length) { toast('Il carrello è vuoto'); return; }
+  if (!currentRistorante || !currentUser) {
+    toast('Sessione cliente non valida. Riscansiona il QR.');
+    return;
+  }
+  if (!sb) {
+    toast('Database non collegato');
+    return;
+  }
+  if (!geoOk) {
+    const ok = await requestGeoForOrder();
+    if (!ok) return;
+  }
+
+  const totale = cart.reduce((s, c) => s + c.prezzo * c.qty, 0);
+  const codice = 'ORD-' + Math.random().toString(36).slice(2, 8).toUpperCase();
+  let pagamento = document.querySelector('input[name="pagamento"]:checked')?.value || 'cassa';
+  const circuito = ($('#circuito-carta')?.value || '').trim() || null;
+  if (pagamento === 'carta' && !circuito) {
+    toast('Seleziona il circuito di pagamento');
+    return;
+  }
+  const stato_pagamento = pagamento === 'carta' ? 'pagato' : 'in_attesa';
+  const note = ($('#ordine-note')?.value || '').trim();
+  const tavoloNum = currentUser.tavolo;
+
+  const ordineBase = {
+    id_ristorante: currentRistorante.id,
+    codice,
+    tavolo: tavoloNum,
+    note,
+    pagamento,
+    circuito: pagamento === 'carta' ? circuito : null,
+    stato_pagamento,
+    totale,
+    stato: 'nuovo'
+  };
+
+  let inserted = null;
+  let error = null;
+  ({ data: inserted, error } = await sb.from('ordini').insert({
+    ...ordineBase,
+    items: cart.map(c => ({ id: c.id, nome: c.nome, prezzo: c.prezzo, qty: c.qty }))
+  }).select().single());
+
+  if (error && String(error.message || '').toLowerCase().includes('items')) {
+    ({ data: inserted, error } = await sb.from('ordini').insert(ordineBase).select().single());
+  }
+  if (error || !inserted) {
+    toast('Errore invio ordine: ' + (error?.message || 'sconosciuto'));
+    return;
+  }
+
+  // UI immediata dopo insert principale (non attendere le secondarie)
+  const cartSnapshot = cart.slice();
+  lastOrdineId = inserted.id;
+  if (!sessionOrders.find(x => x.id === inserted.id)) {
+    sessionOrders.push({ id: inserted.id, codice });
+  }
+
+  $('#ricevuta-codice').textContent = codice;
+  $('#ricevuta-rist').textContent = currentRistorante.nome;
+  $('#ricevuta-tavolo').textContent = currentUser.tavolo;
+  $('#ricevuta-ora').textContent = formatTime(inserted.created_at || new Date().toISOString());
+  $('#ricevuta-pagamento').textContent = pagamento === 'cassa'
+    ? 'Pago in cassa'
+    : ('Carta' + (circuito ? ' (' + (CIRCUITI_LABEL[circuito] || circuito) + ')' : ''));
+  $('#ricevuta-totale').textContent = formatPrice(totale);
+  $('#ricevuta-stato').textContent = 'Nuovo';
+  $('#ricevuta-stato').className = 'badge-stato nuovo';
+  if ($('#ricevuta-pag-stato')) {
+    $('#ricevuta-pag-stato').textContent = labelPagamentoStato(stato_pagamento);
+    $('#ricevuta-pag-stato').className = 'badge-pag ' + stato_pagamento;
+  }
+  $('#ricevuta-items').innerHTML = cartSnapshot.map(i =>
+    `<div class="r-item"><span>${i.qty}× ${i.nome}</span><span>${formatPrice(i.prezzo * i.qty)}</span></div>`
+  ).join('');
+
+  const pdfBtn = $('#btn-scarica-ricevuta');
+  if (pdfBtn) {
+    pdfBtn.style.display = pagamento === 'carta' ? 'block' : 'none';
+    pdfBtn.dataset.ordineId = inserted.id;
+  }
+
+  cart = [];
+  updateCartCount();
+  if ($('#ordine-note')) $('#ordine-note').value = '';
+  showClienteView('ricevuta');
+  if ($('#cliente-stato-btn')) $('#cliente-stato-btn').style.display = 'inline-flex';
+  updateClienteOrdiniSelect();
+  startOrdineStatusPolling();
+  toast('Ordine inviato!');
+  if (typeof saveSession === 'function' && currentUser?.fromQR) saveSession();
+
+  // Secondarie in parallelo (non bloccano UI)
+  Promise.all([
+    sb.from('ordine_riga').insert(cartSnapshot.map(c => ({
+      id_ordine: inserted.id,
+      id_piatto: c.id || null,
+      piatto: c.nome,
+      qty_piatti: c.qty,
+      prezzo_pagato: Number(c.prezzo) * c.qty
+    }))).catch(() => {}),
+    note ? sb.from('messaggio').insert({ id_ordine: inserted.id, testo: note }).catch(() => {}) : Promise.resolve(),
+    sb.from('pagamento').insert({
+      id_ordine: inserted.id,
+      metodo: pagamento,
+      circuito: pagamento === 'carta' ? circuito : null,
+      importo: totale
+    }).catch(() => {}),
+    sb.from('tavoli').update({ occupato: true })
+      .eq('id_ristorante', currentRistorante.id)
+      .eq('numero', currentUser.tavolo).catch(() => {})
+  ]).catch(() => {});
+}
+
+// Configura opzioni pagamento cliente in base al ristorante
+function setupClientePagamenti() {
+  const r = currentRistorante;
+  if (!r) return;
+  const metodo = r.metodo_pagamento || 'entrambi';
+  const opts = $$('#payment-options .payment-opt');
+  opts.forEach(lab => {
+    const t = lab.dataset.tipo;
+    if (metodo === 'entrambi') lab.style.display = '';
+    else if (metodo === 'carta') lab.style.display = t === 'carta' ? '' : 'none';
+    else lab.style.display = t === 'cassa' ? '' : 'none';
+  });
+  // check default
+  const firstVisible = document.querySelector('#payment-options .payment-opt[style=""], #payment-options .payment-opt:not([style*="none"]) input');
+  if (firstVisible) firstVisible.checked = true;
+
+  const circuiti = r.circuiti_carta || ['visa', 'mastercard', 'satispay', 'paypal'];
+  const sel = $('#circuito-carta');
+  const wrap = $('#circuiti-wrap');
+  if (sel) {
+    sel.innerHTML = circuiti.map(c =>
+      `<option value="${c}">${CIRCUITI_LABEL[c] || c}</option>`
+    ).join('');
+  }
+  function syncCircuiti() {
+    const v = document.querySelector('input[name="pagamento"]:checked')?.value;
+    if (wrap) wrap.style.display = (v === 'carta' && (metodo === 'carta' || metodo === 'entrambi')) ? 'block' : 'none';
+  }
+  $$('input[name="pagamento"]').forEach(rdo => rdo.addEventListener('change', syncCircuiti));
+  syncCircuiti();
+}
+
+// Hook renderClienteMenu
+const _origRenderClienteMenu = renderClienteMenu;
+renderClienteMenu = function () {
+  _origRenderClienteMenu();
+  setupClientePagamenti();
+  ensureGeoOnCliente();
+};
+
+// ---- PDF ricevuta ----
+$('#btn-scarica-ricevuta')?.addEventListener('click', () => {
+  if (typeof jspdf === 'undefined' && !window.jspdf) {
+    toast('Libreria PDF non caricata');
+    return;
+  }
+  const { jsPDF } = window.jspdf || {};
+  if (!jsPDF) { toast('jsPDF non disponibile'); return; }
+  const doc = new jsPDF();
+  const codice = $('#ricevuta-codice')?.textContent || '';
+  const rist = $('#ricevuta-rist')?.textContent || '';
+  const tavolo = $('#ricevuta-tavolo')?.textContent || '';
+  const ora = $('#ricevuta-ora')?.textContent || '';
+  const pag = $('#ricevuta-pagamento')?.textContent || '';
+  const totale = $('#ricevuta-totale')?.textContent || '';
+  const items = [...document.querySelectorAll('#ricevuta-items .r-item')].map(el => el.textContent.trim());
+
+  doc.setFontSize(16);
+  doc.text('Ricevuta ordine', 20, 20);
+  doc.setFontSize(11);
+  doc.text(rist, 20, 30);
+  doc.text('Codice: ' + codice, 20, 38);
+  doc.text('Tavolo: ' + tavolo + '  ·  ' + ora, 20, 46);
+  doc.text('Pagamento: ' + pag, 20, 54);
+  let y = 64;
+  doc.text('Dettaglio:', 20, y);
+  y += 8;
+  items.forEach(line => {
+    doc.text(line, 22, y);
+    y += 7;
+  });
+  y += 4;
+  doc.setFontSize(13);
+  doc.text('Totale: ' + totale, 20, y);
+  y += 12;
+  doc.setFontSize(9);
+  doc.text('Documento non fiscale – solo ricevuta di cortesia', 20, y);
+  doc.save('ricevuta-' + codice + '.pdf');
+});
+
+// Modal conferma in-app (niente alert browser)
+function uiConfirm(message, title) {
+  return new Promise((resolve) => {
+    const modal = document.getElementById('modal-confirm');
+    if (!modal) { resolve(window.confirm(message)); return; }
+    const titleEl = document.getElementById('confirm-title');
+    const msgEl = document.getElementById('confirm-message');
+    const yes = document.getElementById('confirm-yes');
+    const no = document.getElementById('confirm-no');
+    const x = document.getElementById('confirm-x');
+    if (titleEl) titleEl.textContent = title || 'Conferma';
+    if (msgEl) msgEl.textContent = message;
+    modal.classList.remove('hidden');
+    const done = (val) => {
+      modal.classList.add('hidden');
+      yes && yes.removeEventListener('click', onYes);
+      no && no.removeEventListener('click', onNo);
+      x && x.removeEventListener('click', onNo);
+      resolve(val);
+    };
+    const onYes = () => done(true);
+    const onNo = () => done(false);
+    yes && yes.addEventListener('click', onYes);
+    no && no.addEventListener('click', onNo);
+    x && x.addEventListener('click', onNo);
+  });
+}
+
+// ---- Drag & drop Kanban ----
+function enableKanbanDrag() {
+  const cols = $$('.kanban-body');
+  cols.forEach(col => {
+    col.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      col.classList.add('drag-over');
+    });
+    col.addEventListener('dragleave', () => col.classList.remove('drag-over'));
+    col.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      col.classList.remove('drag-over');
+      const id = e.dataTransfer.getData('text/ordine-id');
+      const from = e.dataTransfer.getData('text/from-stato');
+      const toCol = col.closest('.kanban-col');
+      const to = toCol?.dataset.stato;
+      if (!id || !to || from === to) return;
+      // conferma salti grandi
+      const order = ['nuovo', 'in_preparazione', 'pronto'];
+      const fi = order.indexOf(from);
+      const ti = order.indexOf(to);
+      if (fi >= 0 && ti >= 0 && Math.abs(ti - fi) > 1) {
+        const ok = await uiConfirm(
+          'Vuoi davvero passare da "' + labelStato(from) + '" a "' + labelStato(to) + '"?',
+          'Conferma spostamento'
+        );
+        if (!ok) return;
+      }
+      await cambiaStatoOrdineSafe(id, to, from);
+    });
+  });
+}
+
+async function cambiaStatoOrdineSafe(ordineId, nuovoStato, fromStato) {
+  if (!navigator.onLine || !sb) {
+    enqueueOffline('update_stato', { id: ordineId, stato: nuovoStato });
+    // update locale
+    const o = currentRistorante?.ordini?.find(x => x.id === ordineId);
+    if (o) o.stato = nuovoStato;
+    await renderOrdiniKanban();
+    toast('Stato salvato offline – sarà sincronizzato');
+    return;
+  }
+  const { error } = await sb.from('ordini').update({ stato: nuovoStato }).eq('id', ordineId);
+  if (error) { toast('Errore: ' + error.message); return; }
+  // stampa automatica quando passa a pronto
+  if (nuovoStato === 'pronto' && fromStato === 'in_preparazione') {
+    tryPrintComanda(ordineId);
+  }
+  if (currentRistorante) {
+    currentRistorante = await loadRistoranteFull(currentRistorante.id);
+  }
+  await renderOrdiniKanban();
+  await renderRistDashboard();
+  toast('Stato: ' + labelStato(nuovoStato));
+}
+
+// Patch renderOrdiniKanban to add draggable
+const _origRenderOrdini = typeof renderOrdiniKanban === 'function' ? renderOrdiniKanban : null;
+if (_origRenderOrdini) {
+  renderOrdiniKanban = async function () {
+    await _origRenderOrdini();
+    $$('.kanban-card').forEach(card => {
+      card.setAttribute('draggable', 'true');
+      card.addEventListener('dragstart', (e) => {
+        const id = card.dataset.id || card.getAttribute('onclick')?.match(/'([^']+)'/)?.[1];
+        const col = card.closest('.kanban-col');
+        e.dataTransfer.setData('text/ordine-id', id || '');
+        e.dataTransfer.setData('text/from-stato', col?.dataset.stato || '');
+        card.classList.add('dragging');
+      });
+      card.addEventListener('dragend', () => card.classList.remove('dragging'));
+    });
+    // ensure data-id on cards if missing – re-scan from current data
+    enableKanbanDrag();
+  };
+}
+
+// Override window.avanzaStato if exists to use safe + print
+if (typeof window.avanzaStato === 'function') {
+  const _av = window.avanzaStato;
+  window.avanzaStato = async function (ordineId, nuovoStato) {
+    const o = currentRistorante?.ordini?.find(x => x.id === ordineId);
+    const from = o?.stato || 'nuovo';
+    await cambiaStatoOrdineSafe(ordineId, nuovoStato, from);
+  };
+}
+
+// ---- Stampa comanda (Epson TM-T88) ----
+// Browser non può stampare ESC/POS direttamente in silenzio.
+// Strategia: 1) genera testo comanda 2) window.print con CSS termico
+// Per stampa silenziosa vera: installare QZ Tray e collegare.
+async function tryPrintComanda(ordineId) {
+  let o = currentRistorante?.ordini?.find(x => x.id === ordineId);
+  if (!o && sb) {
+    const { data } = await sb.from('ordini').select('*').eq('id', ordineId).single();
+    o = data;
+  }
+  if (!o) return;
+  let items = o.items || [];
+  if (!items.length && sb) {
+    const { data: righe } = await sb.from('ordine_riga').select('*').eq('id_ordine', ordineId);
+    items = (righe || []).map(r => ({ nome: r.piatto, qty: r.qty_piatti || 1, prezzo: 0 }));
+  }
+  const lines = [
+    '================================',
+    '  COMANDA CUCINA',
+    '================================',
+    'Codice: ' + (o.codice || ''),
+    'Tavolo: ' + (o.tavolo || ''),
+    'Ora: ' + formatTime(o.created_at || o.createdAt || new Date().toISOString()),
+    '--------------------------------',
+    ...items.map(i => (i.qty || 1) + 'x  ' + (i.nome || '')),
+    o.note ? ('NOTE: ' + o.note) : '',
+    '================================'
+  ].filter(Boolean);
+
+  const w = window.open('', '_blank', 'width=400,height=600');
+  if (!w) {
+    toast('Consenti popup per stampare la comanda');
+    return;
+  }
+  w.document.write(`<!DOCTYPE html><html><head><title>Comanda ${o.codice}</title>
+    <style>
+      @page { size: 80mm auto; margin: 4mm; }
+      body { font-family: monospace; font-size: 13px; white-space: pre-wrap; }
+      @media print { body { margin: 0; } }
+    </style></head><body>${lines.join('\n')}</body></html>`);
+  w.document.close();
+  setTimeout(() => { w.print(); }, 400);
+  toast('Comanda inviata in stampa');
+}
+
+// ---- Chiusura fiscale ----
+async function renderChiusuraFiscale() {
+  if (!currentRistorante || !sb) return;
+  const today = new Date().toISOString().slice(0, 10);
+  const { data: ordini } = await sb.from('ordini')
+    .select('*')
+    .eq('id_ristorante', currentRistorante.id)
+    .gte('created_at', today + 'T00:00:00')
+    .lte('created_at', today + 'T23:59:59');
+
+  const list = ordini || [];
+  let tot = 0, carta = 0, cassa = 0;
+  list.forEach(o => {
+    const t = Number(o.totale) || 0;
+    tot += t;
+    if (o.pagamento === 'carta') carta += t;
+    else cassa += t;
+  });
+  if ($('#chiusura-totale-oggi')) $('#chiusura-totale-oggi').textContent = formatPrice(tot);
+  if ($('#chiusura-n-ordini')) $('#chiusura-n-ordini').textContent = list.length;
+  if ($('#chiusura-carta')) $('#chiusura-carta').textContent = formatPrice(carta);
+  if ($('#chiusura-cassa')) $('#chiusura-cassa').textContent = formatPrice(cassa);
+
+  const el = $('#chiusura-oggi-list');
+  if (el) {
+    el.innerHTML = list.length
+      ? list.map(o => `
+        <div class="recent-item">
+          <span><strong>${o.codice}</strong> · Tav ${o.tavolo} · ${o.pagamento}${o.circuito ? ' (' + o.circuito + ')' : ''}</span>
+          <span>${formatPrice(o.totale)}</span>
+        </div>`).join('')
+      : '<p style="color:var(--muted)">Nessun ordine oggi</p>';
+  }
+
+  const { data: storico } = await sb.from('chiusure_fiscali')
+    .select('*')
+    .eq('id_ristorante', currentRistorante.id)
+    .order('data_giorno', { ascending: false })
+    .limit(30);
+  const body = $('#chiusure-storico-body');
+  if (body) {
+    body.innerHTML = (storico || []).length
+      ? storico.map(c => `
+        <tr>
+          <td>${c.data_giorno}</td>
+          <td>${c.n_ordini}</td>
+          <td>${formatPrice(c.totale)}</td>
+          <td>${formatPrice(c.totale_carta)}</td>
+          <td>${formatPrice(c.totale_cassa)}</td>
+          <td>${c.chiuso_at ? formatTime(c.chiuso_at) : '—'}</td>
+          <td><button class="btn btn-secondary btn-sm" onclick="exportChiusuraPdf('${c.id}')"><i class="fas fa-file-pdf"></i></button></td>
+        </tr>`).join('')
+      : '<tr><td colspan="7" style="text-align:center;color:var(--muted)">Nessuna chiusura ancora</td></tr>';
+  }
+}
+
+$('#btn-chiudi-giornata')?.addEventListener('click', async () => {
+  if (!currentRistorante || !sb) return;
+  if (!(await uiConfirm('Chiudere la giornata fiscale di oggi?', 'Chiusura giornata'))) return;
+  const today = new Date().toISOString().slice(0, 10);
+  const { data: ordini } = await sb.from('ordini')
+    .select('*')
+    .eq('id_ristorante', currentRistorante.id)
+    .gte('created_at', today + 'T00:00:00')
+    .lte('created_at', today + 'T23:59:59');
+  const list = ordini || [];
+  let tot = 0, carta = 0, cassa = 0;
+  const dettaglio = list.map(o => {
+    const t = Number(o.totale) || 0;
+    tot += t;
+    if (o.pagamento === 'carta') carta += t; else cassa += t;
+    return { codice: o.codice, tavolo: o.tavolo, totale: t, pagamento: o.pagamento, circuito: o.circuito };
+  });
+  const { error } = await sb.from('chiusure_fiscali').upsert({
+    id_ristorante: currentRistorante.id,
+    data_giorno: today,
+    totale: tot,
+    n_ordini: list.length,
+    totale_carta: carta,
+    totale_cassa: cassa,
+    dettaglio,
+    chiuso_at: new Date().toISOString(),
+    chiuso_da: currentUser?.id || null
+  }, { onConflict: 'id_ristorante,data_giorno' });
+  if (error) { toast('Errore: ' + error.message); return; }
+  toast('Giornata chiusa – totale ' + formatPrice(tot));
+  await renderChiusuraFiscale();
+});
+
+$('#btn-export-chiusura-pdf')?.addEventListener('click', () => {
+  exportChiusuraOggiPdf();
+});
+
+function exportChiusuraOggiPdf() {
+  if (!window.jspdf?.jsPDF) { toast('jsPDF non disponibile'); return; }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  doc.setFontSize(14);
+  doc.text('Chiusura fiscale – ' + (currentRistorante?.nome || ''), 20, 20);
+  doc.setFontSize(11);
+  doc.text('Data: ' + new Date().toLocaleDateString('it-IT'), 20, 30);
+  doc.text('Incasso: ' + ($('#chiusura-totale-oggi')?.textContent || ''), 20, 38);
+  doc.text('Ordini: ' + ($('#chiusura-n-ordini')?.textContent || ''), 20, 46);
+  doc.text('Carta: ' + ($('#chiusura-carta')?.textContent || ''), 20, 54);
+  doc.text('Cassa: ' + ($('#chiusura-cassa')?.textContent || ''), 20, 62);
+  doc.save('chiusura-' + new Date().toISOString().slice(0, 10) + '.pdf');
+}
+
+window.exportChiusuraPdf = async function (id) {
+  if (!sb || !window.jspdf?.jsPDF) return;
+  const { data: c } = await sb.from('chiusure_fiscali').select('*').eq('id', id).single();
+  if (!c) return;
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  doc.setFontSize(14);
+  doc.text('Chiusura fiscale', 20, 20);
+  doc.setFontSize(11);
+  doc.text('Data giorno: ' + c.data_giorno, 20, 30);
+  doc.text('Totale: ' + formatPrice(c.totale), 20, 38);
+  doc.text('Ordini: ' + c.n_ordini, 20, 46);
+  doc.text('Carta: ' + formatPrice(c.totale_carta), 20, 54);
+  doc.text('Cassa: ' + formatPrice(c.totale_cassa), 20, 62);
+  doc.save('chiusura-' + c.data_giorno + '.pdf');
+};
+
+// Nav chiusura
+$$('#app-ristoratore .nav-item').forEach(item => {
+  item.addEventListener('click', async () => {
+    if (item.dataset.page === 'rist-chiusura') {
+      await renderChiusuraFiscale();
+    }
+  });
+});
+
+// ---- Salvataggio ristorante: metodi pagamento + geo ----
+(function patchFormRistorante() {
+  const form = $('#form-ristorante');
+  if (!form) return;
+  form.addEventListener('submit', (e) => {
+    // i valori vengono letti dal submit handler esistente; patchiamo i dati prima
+    // tramite override leggero: intercettiamo dopo un tick non serve.
+  }, true);
 })();
+
+// Estendi dati insert/update ristorante
+const _origFormSubmit = $('#form-ristorante');
+// Monkey-patch create/update data object inside existing handler is hard;
+// aggiungiamo listener che aggiorna dopo il save se campi presenti.
+$('#form-ristorante')?.addEventListener('submit', async () => {
+  setTimeout(async () => {
+    if (!sb) return;
+    const id = $('#edit-id')?.value;
+    // per nuovo ristorante l'id non c'è ancora: prova a cercare per email
+    const email = ($('#email')?.value || '').trim().toLowerCase();
+    const extra = {
+      metodo_pagamento: $('#metodo_pagamento')?.value || 'entrambi',
+      circuiti_carta: [...$$('#circuiti-grid input:checked')].map(c => c.value),
+      lat: parseFloat($('#rist-lat')?.value) || null,
+      lng: parseFloat($('#rist-lng')?.value) || null,
+      raggio_metri: parseInt($('#rist-raggio')?.value, 10) || 250
+    };
+    if (id) {
+      await sb.from('ristoranti').update(extra).eq('id', id);
+    } else if (email) {
+      await sb.from('ristoranti').update(extra).eq('email', email);
+    }
+  }, 1500);
+});
+
+// Toggle circuiti form
+$('#metodo_pagamento')?.addEventListener('change', () => {
+  const v = $('#metodo_pagamento').value;
+  const wrap = $('#circuiti-form-wrap');
+  if (wrap) wrap.style.display = v === 'cassa' ? 'none' : '';
+});
+
+// Popola campi edit
+const _origEditRist = window.editRistorante;
+window.editRistorante = async function (id) {
+  await _origEditRist(id);
+  const { data: r } = await sb.from('ristoranti').select('*').eq('id', id).single();
+  if (!r) return;
+  if ($('#metodo_pagamento')) $('#metodo_pagamento').value = r.metodo_pagamento || 'entrambi';
+  if ($('#rist-lat')) $('#rist-lat').value = r.lat ?? '';
+  if ($('#rist-lng')) $('#rist-lng').value = r.lng ?? '';
+  if ($('#rist-raggio')) $('#rist-raggio').value = r.raggio_metri || 250;
+  const circuiti = r.circuiti_carta || ['visa', 'mastercard', 'satispay', 'paypal'];
+  $$('#circuiti-grid input').forEach(c => { c.checked = circuiti.includes(c.value); });
+  const wrap = $('#circuiti-form-wrap');
+  if (wrap) wrap.style.display = (r.metodo_pagamento === 'cassa') ? 'none' : '';
+};
+
+
+// =====================================================
+// SESSIONE / REFRESH
+// Admin + Ristoratore: restano al refresh (niente flash)
+// Cliente da ADMIN demo: al refresh torna ADMIN
+// Cliente da QR: resta cliente + ordini
+// =====================================================
+function saveSession() {
+  try {
+    if (!currentUser?.role) return;
+    // Cliente da demo admin: non salvare (al refresh torna admin)
+    if (currentUser.role === 'cliente' && currentUser.fromAdminDemo) return;
+    localStorage.setItem('mp_session', JSON.stringify({
+      role: currentUser.role,
+      email: currentUser.email || null,
+      id: currentUser.id || null,
+      ruolo: currentUser.ruolo || currentUser.role,
+      ristoranteId: currentRistorante?.id || currentUser.ristoranteId || null,
+      tavolo: currentUser.tavolo != null ? currentUser.tavolo : null,
+      lastOrdineId: lastOrdineId || null,
+      sessionOrders: sessionOrders || [],
+      cart: cart || [],
+      fromQR: !!currentUser.fromQR,
+      ts: Date.now()
+    }));
+  } catch (_) {}
+}
+function clearRestoringClass() {
+  document.documentElement.classList.remove(
+    'mp-restoring', 'mp-role-admin', 'mp-role-ristoratore', 'mp-role-staff', 'mp-role-cliente'
+  );
+}
+async function restoreSession() {
+  try {
+    const raw = localStorage.getItem('mp_session');
+    if (!raw || !sb) { clearRestoringClass(); return false; }
+    const s = JSON.parse(raw);
+    if (!s?.role || !s.ts || Date.now() - s.ts > 12 * 60 * 60 * 1000) {
+      localStorage.removeItem('mp_session');
+      clearRestoringClass();
+      return false;
+    }
+    if (s.role === 'cliente' && s.fromQR && s.ristoranteId && s.tavolo != null) {
+      document.documentElement.classList.add('mp-role-cliente');
+      const r = await loadRistoranteFull(s.ristoranteId);
+      if (!r) { clearRestoringClass(); return false; }
+      currentUser = { role: 'cliente', ristoranteId: s.ristoranteId, tavolo: s.tavolo, fromQR: true };
+      currentRistorante = r;
+      cart = Array.isArray(s.cart) ? s.cart : [];
+      lastOrdineId = s.lastOrdineId || null;
+      sessionOrders = Array.isArray(s.sessionOrders) ? s.sessionOrders : [];
+      document.body.classList.add('cliente-night');
+      $('#login-screen')?.classList.add('hidden');
+      $('#app-admin')?.classList.add('hidden');
+      $('#app-ristoratore')?.classList.add('hidden');
+      $('#app-cliente')?.classList.remove('hidden');
+      if ($('#cliente-rist-nome')) $('#cliente-rist-nome').textContent = r.nome;
+      if ($('#cliente-tavolo-num')) $('#cliente-tavolo-num').textContent = s.tavolo;
+      showClienteView(lastOrdineId ? 'ricevuta' : 'menu');
+      renderClienteMenu();
+      if (typeof setupClientePagamenti === 'function') setupClientePagamenti();
+      if (typeof ensureGeoOnCliente === 'function') ensureGeoOnCliente();
+      if (typeof updateCartCount === 'function') updateCartCount();
+      if (lastOrdineId) {
+        if (typeof updateClienteOrdiniSelect === 'function') updateClienteOrdiniSelect();
+        if (typeof startOrdineStatusPolling === 'function') startOrdineStatusPolling();
+        try {
+          const { data: o } = await sb.from('ordini').select('*').eq('id', lastOrdineId).single();
+          if (o) {
+            if ($('#ricevuta-codice')) $('#ricevuta-codice').textContent = o.codice || '';
+            if ($('#ricevuta-rist')) $('#ricevuta-rist').textContent = r.nome;
+            if ($('#ricevuta-tavolo')) $('#ricevuta-tavolo').textContent = o.tavolo;
+            if ($('#ricevuta-totale')) $('#ricevuta-totale').textContent = formatPrice(o.totale);
+            if (typeof applyOrdineStatusUI === 'function') applyOrdineStatusUI(o, true);
+          }
+        } catch (_) {}
+      }
+      clearRestoringClass();
+      return true;
+    }
+    if (s.role === 'admin' && s.email) {
+      document.documentElement.classList.add('mp-role-admin');
+      await enterAsAdmin(s.email);
+      clearRestoringClass();
+      return true;
+    }
+    if ((s.role === 'ristoratore' || s.role === 'staff') && s.ristoranteId) {
+      document.documentElement.classList.add(s.role === 'staff' ? 'mp-role-staff' : 'mp-role-ristoratore');
+      const r = await loadRistoranteFull(s.ristoranteId);
+      if (!r) { clearRestoringClass(); return false; }
+      currentUser = { role: s.role, email: s.email, id: s.id, ruolo: s.ruolo || s.role, ristoranteId: s.ristoranteId };
+      await enterAsRistoratore(r);
+      if (s.email && typeof loadUserRistoranti === 'function') {
+        const { data: u } = await sb.from('utenti').select('*').eq('email', s.email).maybeSingle();
+        if (u) {
+          userRistoranti = await loadUserRistoranti(u);
+          if (!userRistoranti.length) userRistoranti = [r];
+          if (typeof populateRistSwitcher === 'function') populateRistSwitcher();
+          const meta = userRistoranti.find(x => x.id === r.id) || userRistoranti[0];
+          if (typeof applyStaffNav === 'function') {
+            applyStaffNav(u.ruolo === 'staff' || s.role === 'staff' || meta?._ruolo_locale === 'staff');
+          }
+        }
+      }
+      if (typeof startOrdiniPolling === 'function') startOrdiniPolling();
+      clearRestoringClass();
+      return true;
+    }
+  } catch (e) { console.warn('restoreSession', e); }
+  clearRestoringClass();
+  return false;
+}
+
+const _enterAdminSess = enterAsAdmin;
+enterAsAdmin = async function (email) {
+  const ok = await _enterAdminSess(email);
+  saveSession();
+  return ok;
+};
+const _enterRistSess = enterAsRistoratore;
+enterAsRistoratore = async function (r) {
+  const ok = await _enterRistSess(r);
+  if (currentUser?.role !== 'cliente') saveSession();
+  if (typeof startOrdiniPolling === 'function') startOrdiniPolling();
+  return ok;
+};
+if (typeof inviaOrdineCliente === 'function') {
+  const _inv = inviaOrdineCliente;
+  inviaOrdineCliente = async function () {
+    const res = await _inv.apply(this, arguments);
+    if (currentUser?.fromQR) saveSession();
+    return res;
+  };
+}
+
+(async function bootSession() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('r') && params.get('t')) { clearRestoringClass(); return; }
+  let n = 0;
+  while (!sb && n < 40) { await new Promise(r => setTimeout(r, 50)); n++; }
+  if (!currentUser) await restoreSession();
+  else clearRestoringClass();
+})();
+
+console.log('MenuPro v2 extensions loaded');

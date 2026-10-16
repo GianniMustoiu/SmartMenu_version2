@@ -6,24 +6,33 @@
     (function () {
       try {
         var p = new URLSearchParams(location.search);
-        if (p.get('r') && p.get('t')) document.documentElement.classList.add('qr-entry');
+        if (p.get('r') && p.get('t')) {
+          document.documentElement.classList.add('qr-entry');
+          return;
+        }
+        var raw = localStorage.getItem('mp_session');
+        if (!raw) return;
+        var s = JSON.parse(raw);
+        if (!s || !s.role || !s.ts || (Date.now() - s.ts) > 12 * 60 * 60 * 1000) return;
+        if (s.role === 'cliente' && !s.fromQR) return;
+        document.documentElement.classList.add('mp-restoring');
+        if (s.role === 'admin') document.documentElement.classList.add('mp-role-admin');
+        else if (s.role === 'ristoratore') document.documentElement.classList.add('mp-role-ristoratore');
+        else if (s.role === 'staff') document.documentElement.classList.add('mp-role-staff');
+        else if (s.role === 'cliente' && s.fromQR) document.documentElement.classList.add('mp-role-cliente');
       } catch (e) {}
     })();
   </script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="theme-color" content="#0b1220" />
-  <link rel="manifest" href="manifest.webmanifest" />
-  <link rel="icon" type="image/png" href="icons/icon-192.png" />
-  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
-  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="theme-color" content="#1d4ed8" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-title" content="MenuPro" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <title>MenuPro – Demo Completa</title>
+  <link rel="manifest" href="manifest.json" />
+  <title>MenuPro – Gestione ristorante</title>
   <link rel="stylesheet" href="style.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
 </head>
 <body>
   <div id="login-screen" class="login-screen">
@@ -36,16 +45,15 @@
       <form id="login-form" novalidate>
         <div class="form-group">
           <label>Email</label>
-          <input type="text" id="login-email"  />
+          <input type="text" id="login-email"/>
         </div>
         <div class="form-group">
           <label>Password</label>
-          <input type="password" id="login-password"  />
+          <input type="password" id="login-password" />
         </div>
         <button type="submit" class="btn btn-primary btn-block">
           <i class="fas fa-sign-in-alt"></i> Accedi
         </button>
-
       </form>
     </div>
   </div>
@@ -234,13 +242,19 @@
         <i class="fas fa-store"></i>
         <span id="rist-nome-sidebar">Ristorante</span>
       </div>
-      <nav>
-        <a href="#" class="nav-item active" data-page="rist-dashboard"><i class="fas fa-chart-pie"></i> <span>Panoramica</span></a>
-        <a href="#" class="nav-item" data-page="rist-menu"><i class="fas fa-book-open"></i> <span>Menu</span></a>
+      <div id="rist-switcher-wrap" class="rist-switcher-wrap hidden">
+        <label class="rist-switcher-label">Ristorante</label>
+        <select id="rist-switcher" class="rist-switcher"></select>
+      </div>
+      <nav id="rist-nav">
+        <a href="#" class="nav-item active nav-full" data-page="rist-dashboard"><i class="fas fa-chart-pie"></i> <span>Panoramica</span></a>
+        <a href="#" class="nav-item nav-full" data-page="rist-menu"><i class="fas fa-book-open"></i> <span>Menu</span></a>
         <a href="#" class="nav-item" data-page="rist-ordini"><i class="fas fa-clipboard-list"></i> <span>Ordini</span> <span id="badge-ordini" class="nav-badge hidden">0</span></a>
-        <a href="#" class="nav-item" data-page="rist-tavoli"><i class="fas fa-qrcode"></i> <span>Tavoli &amp; QR</span></a>
+        <a href="#" class="nav-item nav-full" data-page="rist-tavoli"><i class="fas fa-qrcode"></i> <span>Tavoli &amp; QR</span></a>
+        <a href="#" class="nav-item nav-full" data-page="rist-chiusura"><i class="fas fa-file-invoice-dollar"></i> <span>Chiusura fiscale</span></a>
       </nav>
       <div class="sidebar-footer">
+        <div id="offline-badge" class="offline-badge hidden"><i class="fas fa-wifi"></i> Offline – modifiche in coda</div>
         <button class="btn-icon theme-toggle" title="Tema chiaro/scuro"><i class="fas fa-sun"></i></button>
         <button class="btn-icon logout-btn" title="Esci"><i class="fas fa-sign-out-alt"></i></button>
       </div>
@@ -350,10 +364,54 @@
         <div id="piantina" class="piantina"></div>
         <div id="tavoli-grid" class="tavoli-grid" style="margin-top:24px"></div>
       </section>
+
+      <section id="page-rist-chiusura" class="page hidden">
+        <div class="cards">
+          <div class="card">
+            <div class="card-icon green"><i class="fas fa-euro-sign"></i></div>
+            <div><h3 id="chiusura-totale-oggi">€0</h3><p>Incasso oggi</p></div>
+          </div>
+          <div class="card">
+            <div class="card-icon blue"><i class="fas fa-receipt"></i></div>
+            <div><h3 id="chiusura-n-ordini">0</h3><p>Ordini oggi</p></div>
+          </div>
+          <div class="card">
+            <div class="card-icon purple"><i class="fas fa-credit-card"></i></div>
+            <div><h3 id="chiusura-carta">€0</h3><p>Di cui carta</p></div>
+          </div>
+          <div class="card">
+            <div class="card-icon orange"><i class="fas fa-cash-register"></i></div>
+            <div><h3 id="chiusura-cassa">€0</h3><p>Di cui cassa</p></div>
+          </div>
+        </div>
+        <div class="toolbar">
+          <button id="btn-chiudi-giornata" class="btn btn-primary"><i class="fas fa-lock"></i> Chiudi giornata (chiusura fiscale)</button>
+          <button id="btn-export-chiusura-pdf" class="btn btn-secondary"><i class="fas fa-file-pdf"></i> Esporta PDF oggi</button>
+        </div>
+        <div class="recent-box">
+          <h3>Pagamenti di oggi</h3>
+          <div id="chiusura-oggi-list" class="recent-list"></div>
+        </div>
+        <div class="recent-box" style="margin-top:24px">
+          <h3>Storico chiusure fiscali</h3>
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr><th>Data</th><th>Ordini</th><th>Totale</th><th>Carta</th><th>Cassa</th><th>Chiusa il</th><th>Azioni</th></tr>
+              </thead>
+              <tbody id="chiusure-storico-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
     </main>
   </div>
 
   <div id="app-cliente" class="app-cliente hidden">
+    <div id="geo-banner" class="geo-banner hidden">
+      <p><i class="fas fa-map-marker-alt"></i> Per ordinare conferma di essere nel locale (posizione richiesta).</p>
+      <button id="btn-geo-ok" class="btn btn-primary btn-sm">Conferma posizione</button>
+    </div>
     <header class="cliente-header">
       <div>
         <h1 id="cliente-rist-nome">Ristorante</h1>
@@ -385,11 +443,15 @@
           <label>Messaggio / richieste (es. togli formaggio)</label>
           <textarea id="ordine-note" rows="2" placeholder="Allergie, modifiche, richieste speciali..."></textarea>
         </div>
-        <div class="form-group">
+        <div class="form-group" id="pagamento-group">
           <label>Metodo di pagamento</label>
-          <div class="payment-options">
-            <label class="payment-opt"><input type="radio" name="pagamento" value="carta" checked /> <i class="fas fa-credit-card"></i> Carta</label>
-            <label class="payment-opt"><input type="radio" name="pagamento" value="cassa" /> <i class="fas fa-cash-register"></i> Pago in cassa</label>
+          <div class="payment-options" id="payment-options">
+            <label class="payment-opt" data-tipo="carta"><input type="radio" name="pagamento" value="carta" checked /> <i class="fas fa-credit-card"></i> Carta</label>
+            <label class="payment-opt" data-tipo="cassa"><input type="radio" name="pagamento" value="cassa" /> <i class="fas fa-cash-register"></i> Pago in cassa</label>
+          </div>
+          <div id="circuiti-wrap" class="circuiti-wrap" style="margin-top:10px;display:none">
+            <label style="text-transform:none;font-size:12px">Circuito / app</label>
+            <select id="circuito-carta"></select>
           </div>
         </div>
         <button id="btn-invia-ordine" class="btn btn-primary btn-block"><i class="fas fa-paper-plane"></i> Conferma ordine</button>
@@ -427,6 +489,9 @@
           </p>
           <button id="btn-aggiorna-stato" class="btn btn-secondary btn-block" style="margin-top:10px;display:none">
             <i class="fas fa-sync"></i> Aggiorna stato
+          </button>
+          <button id="btn-scarica-ricevuta" class="btn btn-secondary btn-block" style="margin-top:10px;display:none">
+            <i class="fas fa-file-pdf"></i> Scarica ricevuta PDF
           </button>
           <button id="btn-nuovo-ordine" class="btn btn-primary btn-block" style="margin-top:10px">
             <i class="fas fa-plus"></i> Ordina ancora
@@ -506,6 +571,42 @@
           <label>Numero tavoli iniziale</label>
           <input type="number" id="n_tavoli" min="1" max="200" value="8" />
           <small style="color:var(--muted)">Il ristoratore potrà poi configurare posti e tipo di ogni tavolo</small>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Pagamenti accettati *</label>
+            <select id="metodo_pagamento">
+              <option value="entrambi">Carta e cassa</option>
+              <option value="carta">Solo carta / online</option>
+              <option value="cassa">Solo cassa</option>
+            </select>
+          </div>
+          <div class="form-group" id="circuiti-form-wrap">
+            <label>Circuiti carta / app</label>
+            <div class="allergeni-grid" id="circuiti-grid">
+              <label class="check-label"><input type="checkbox" value="visa" checked /> Visa</label>
+              <label class="check-label"><input type="checkbox" value="mastercard" checked /> Mastercard</label>
+              <label class="check-label"><input type="checkbox" value="satispay" checked /> Satispay</label>
+              <label class="check-label"><input type="checkbox" value="paypal" checked /> PayPal</label>
+              <label class="check-label"><input type="checkbox" value="amex" /> American Express</label>
+              <label class="check-label"><input type="checkbox" value="applepay" /> Apple Pay</label>
+            </div>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Latitudine (anti-truffa QR)</label>
+            <input type="number" id="rist-lat" step="0.000001" placeholder="es. 45.4642" />
+          </div>
+          <div class="form-group">
+            <label>Longitudine</label>
+            <input type="number" id="rist-lng" step="0.000001" placeholder="es. 9.1900" />
+          </div>
+        </div>
+        <div class="form-group" style="padding:0 24px">
+          <label>Raggio consentito (metri)</label>
+          <input type="number" id="rist-raggio" min="50" max="2000" value="250" />
+          <small style="color:var(--muted)">Il cliente deve essere entro questo raggio per ordinare. Usa Google Maps per lat/lng del locale.</small>
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-secondary close-modal" data-modal="modal-ristorante">Annulla</button>
@@ -775,10 +876,39 @@
     </div>
   </div>
 
+
+  <div id="modal-confirm" class="modal hidden">
+    <div class="modal-content" style="max-width:400px">
+      <div class="modal-header">
+        <h3 id="confirm-title">Conferma</h3>
+        <button type="button" class="close-modal" id="confirm-x" data-modal="modal-confirm">&times;</button>
+      </div>
+      <div style="padding:16px 24px">
+        <p id="confirm-message" style="margin:0;line-height:1.5;color:var(--text)"></p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" id="confirm-no">Annulla</button>
+        <button type="button" class="btn btn-primary" id="confirm-yes">Conferma</button>
+      </div>
+    </div>
+  </div>
+
 <div id="toast" class="toast hidden"></div>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script>
+    // Fallback se config.js non è sul server (causa principale QR rotti)
+    window.MENUPRO_CONFIG = window.MENUPRO_CONFIG || {
+      SUPABASE_URL: 'https://werrfyrzvqkglbbacuub.supabase.co',
+      SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndlcnJmeXJ6dnFrZ2xiYmFjdXViIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE5NTczMzQsImV4cCI6MjEwNzUzMzMzNH0.nMUeOaH3byi1Pbfxy_s-aU7j8XX50HstdUcPQkgFePk',
+      SITE_URL: 'https://smartmenuversion2.vercel.app/'
+    };
+  </script>
   <script src="config.js"></script>
-  <script src="offline.js"></script>
   <script src="script.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch(function () {});
+    }
+  </script>
 </body>
 </html>
