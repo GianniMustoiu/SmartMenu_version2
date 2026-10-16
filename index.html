@@ -10,6 +10,17 @@
       } catch (e) {}
     })();
   </script>
+  <script>
+    (function () {
+      try {
+        var p = new URLSearchParams(location.search);
+        if (localStorage.getItem('menupro_session') && !(p.get('r') && p.get('t'))) {
+          document.documentElement.classList.add('restoring');
+          setTimeout(function () { document.documentElement.classList.remove('restoring'); }, 12000);
+        }
+      } catch (e) {}
+    })();
+  </script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#0b1220" />
   <link rel="manifest" href="manifest.webmanifest" />
