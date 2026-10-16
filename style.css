@@ -1392,3 +1392,6 @@ body.cliente-night { color-scheme: dark; }
   #print-area td.q { width: 14mm; font-weight: 700; }
   #print-area .tot { font-size: 16px; font-weight: 700; text-align: right; }
 }
+
+/* mentre si riapre la sessione salvata non mostrare il login */
+html.restoring #login-screen { display: none !important; }
