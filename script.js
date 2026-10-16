@@ -5,9 +5,15 @@
 const cfg = window.MENUPRO_CONFIG || {};
 let sb = null;
 try {
-  if (window.supabase && cfg.SUPABASE_URL && cfg.SUPABASE_ANON_KEY &&
+  if ((window.supabase || window.OFFLINE) && cfg.SUPABASE_URL && cfg.SUPABASE_ANON_KEY &&
       !String(cfg.SUPABASE_ANON_KEY).includes('INCOLLA')) {
-    sb = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
+    // OFFLINE.wrap(): stesso client di prima, ma con database locale e coda di sincronizzazione.
+    // Se la libreria Supabase non è disponibile (offline al primo avvio) funziona solo in locale.
+    const realClient = window.supabase
+      ? window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY,
+          window.OFFLINE ? { global: { fetch: window.OFFLINE.fetch } } : undefined)
+      : null;
+    sb = window.OFFLINE ? window.OFFLINE.wrap(realClient) : realClient;
   } else {
     console.warn('Supabase non configurato correttamente in config.js');
   }
@@ -147,8 +153,24 @@ async function enterAsAdmin(email) {
 }
 
 async function enterAsRistoratore(r) {
-  currentRistorante = await loadRistoranteFull(r.id || r.ristoranteId);
+  // il ruolo va impostato PRIMA di caricare i dati: serve a salvarli per l'uso offline
   currentUser = { role: 'ristoratore', email: r.email, ristoranteId: r.id || r.ristoranteId };
+  currentRistorante = await loadRistoranteFull(r.id || r.ristoranteId);
+  if (!currentRistorante) {
+    currentUser = null;
+    toast(navigator.onLine === false
+      ? 'Sei offline e i dati del ristorante non sono ancora salvati su questo dispositivo'
+      : 'Impossibile caricare i dati del ristorante');
+    return false;
+  }
+  // ricorda l'accesso su questo dispositivo (mai la password): dopo un ricaricamento
+  // l'app si riapre da sola, anche offline
+  const session = {
+    role: 'ristoratore', ristoranteId: currentRistorante.id,
+    email: r.email, nome: currentRistorante.nome || r.nome || ''
+  };
+  try { localStorage.setItem('menupro_session', JSON.stringify(session)); } catch (e) { console.warn('localStorage non disponibile', e); }
+  if (window.OFFLINE) window.OFFLINE.saveSession(session);
   $('#login-screen').classList.add('hidden');
   $('#app-ristoratore').classList.remove('hidden');
   $('#rist-nome-sidebar').textContent = (currentRistorante && currentRistorante.nome) || r.nome || 'Ristorante';
@@ -169,6 +191,11 @@ async function doLogin(email, pass) {
     return false;
   }
 
+  if (navigator.onLine === false) {
+    toast('Sei offline: il primo accesso richiede la connessione. Se avevi già effettuato l\'accesso su questo dispositivo, riapri l\'app.');
+    return false;
+  }
+
   // ========== 1) API server-side /api/utenti ==========
   try {
     const resp = await fetch('/api/utenti', {
@@ -183,7 +210,7 @@ async function doLogin(email, pass) {
       }
       if (json.user.ruolo === 'ristoratore') {
         // se l'API non manda ristoranteId, cercalo per email
-        if (!json.user.ristoranteId && !json.user.id && sb) {
+        if (!json.user.ristoranteId && sb) {
           const { data: r } = await sb.from('ristoranti').select('*').eq('email', json.user.email).maybeSingle();
           if (r) return await enterAsRistoratore(r);
         }
@@ -258,7 +285,13 @@ $('#login-form').addEventListener('submit', async (e) => {
 // LOGOUT
 // =====================================================
 $$('.logout-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
+  btn.addEventListener('click', async () => {
+    // se ci sono modifiche non ancora inviate chiede conferma; poi svuota i dati locali
+    if (window.OFFLINE) {
+      if (!(await window.OFFLINE.beforeLogout())) return;
+      await window.OFFLINE.onLogout();
+    }
+    try { localStorage.removeItem('menupro_session'); } catch (e) {}
     stopOrdineStatusPolling();
     document.body.classList.remove('cliente-night');
     currentUser = null;
@@ -1295,12 +1328,14 @@ async function renderOrdiniKanban() {
   $('#count-pronto').textContent = pronti.length;
 
   function cardHtml(o) {
+    const pend = (window.OFFLINE && window.OFFLINE.isPending('ordini', o.id))
+      ? '<span class="pending-badge" title="In attesa di sincronizzazione"><i class="fas fa-clock"></i></span>' : '';
     const items = (o.items || []).slice(0, 3).map(i => `${i.qty}× ${i.nome}`).join(', ');
     const more = (o.items || []).length > 3 ? '...' : '';
     const ps = o.stato_pagamento || defaultPagStato(o.pagamento);
     return `
       <div class="kanban-card stato-${o.stato}" onclick="apriDettaglioOrdine('${o.id}')">
-        <h4>Tavolo ${o.tavolo} · ${formatPrice(o.totale)}</h4>
+        <h4>Tavolo ${o.tavolo} · ${formatPrice(o.totale)} ${pend}</h4>
         <p>${items}${more}</p>
         <div class="pag-row">
           <span style="font-size:11px;color:var(--muted)">${formatTime(o.createdAt)} · #${o.codice}</span>
@@ -1368,6 +1403,7 @@ window.apriDettaglioOrdine = async function(ordineId) {
   const nextPag = { in_attesa: 'pagato', pagato: 'non_pagato', non_pagato: 'in_attesa' }[ps] || 'pagato';
   const pagBtnLabel = { pagato: 'Segna pagato', non_pagato: 'Segna non pagato', in_attesa: 'Segna in attesa' }[nextPag];
   actions += `<button class="btn btn-secondary" onclick="togglePagamento('${o.id}')"><i class="fas fa-money-bill-wave"></i> ${pagBtnLabel}</button>`;
+  actions += `<button class="btn btn-secondary" onclick="stampaOrdine('${o.id}')"><i class="fas fa-print"></i> Stampa</button>`;
   if (o.stato !== 'chiuso') {
     actions += `<button class="btn btn-danger" onclick="chiudiConto('${o.id}')"><i class="fas fa-file-invoice-dollar"></i> Chiudi conto</button>`;
   }
@@ -1848,7 +1884,9 @@ $('#btn-invia-ordine')?.addEventListener('click', async () => {
   showClienteView('ricevuta');
   $('#cliente-stato-btn').style.display = 'inline-flex';
   startOrdineStatusPolling();
-  toast('Ordine inviato!');
+  toast(window.OFFLINE && window.OFFLINE.pendingCount() > 0
+    ? 'Ordine salvato: verrà inviato appena torna la connessione'
+    : 'Ordine inviato!');
 });
 
 
@@ -2073,6 +2111,9 @@ $('#form-reset-pass')?.addEventListener('submit', async (e) => {
   if (appC) { appC.classList.remove('hidden'); appC.classList.add('cliente-ui'); }
   document.body.classList.add('cliente-night');
 
+  // ruolo impostato prima del caricamento: serve a salvare il menu per l'uso offline
+  currentUser = { role: 'cliente', ristoranteId: rId, tavolo: t };
+
   try {
     let r = null;
     if (sb) r = await loadRistoranteFull(rId);
@@ -2092,5 +2133,70 @@ $('#form-reset-pass')?.addEventListener('submit', async (e) => {
   } catch (e) {
     console.error('QR init error:', e);
     toast('Errore apertura menu da QR');
+  }
+})();
+
+
+// =====================================================
+// STAMPA COMANDA / RICEVUTA (funziona anche offline)
+// =====================================================
+function escapeHtml(v) {
+  return String(v == null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+window.stampaOrdine = function(ordineId) {
+  const o = currentRistorante && (currentRistorante.ordini || []).find(x => x.id === ordineId);
+  if (!o) return;
+  const ps = o.stato_pagamento || defaultPagStato(o.pagamento);
+  const metodo = o.pagamento === 'cassa' ? 'Pago in cassa' : (o.pagamento === 'carta' ? 'Carta' : (o.pagamento || '—'));
+  const righe = (o.items || []).map(i =>
+    `<tr><td class="q">${escapeHtml(i.qty)}×</td><td>${escapeHtml(i.nome)}</td></tr>`).join('');
+  let area = document.getElementById('print-area');
+  if (!area) {
+    area = document.createElement('div');
+    area.id = 'print-area';
+    document.body.appendChild(area);
+  }
+  area.innerHTML = `
+    <h2>${escapeHtml(currentRistorante.nome)}</h2>
+    <p class="big">Tavolo ${escapeHtml(o.tavolo)}</p>
+    <p>Ordine #${escapeHtml(o.codice)} · ${escapeHtml(formatTime(o.createdAt))}</p>
+    <hr>
+    <table>${righe || '<tr><td>Nessun piatto</td></tr>'}</table>
+    ${o.note ? `<hr><p>Note: ${escapeHtml(o.note)}</p>` : ''}
+    <hr>
+    <p class="tot">Totale ${escapeHtml(formatPrice(o.totale))}</p>
+    <p>${escapeHtml(metodo)} – ${escapeHtml(labelPagamentoStato(ps))}</p>
+  `;
+  window.print();
+};
+
+// =====================================================
+// RIAPERTURA SESSIONE (anche offline)
+// Se questo dispositivo era già entrato come ristoratore, riapre direttamente l'app.
+// =====================================================
+(async function restoreSavedSession() {
+  const done = () => document.documentElement.classList.remove('restoring');
+  try {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('r') && params.get('t')) return;   // arrivo da QR = cliente
+
+    let s = null;
+    try { s = JSON.parse(localStorage.getItem('menupro_session') || 'null'); } catch (e) {}
+    if (!s && window.OFFLINE) s = await window.OFFLINE.loadSession();
+    if (!s || s.role !== 'ristoratore' || !s.ristoranteId) return;
+
+    const ok = await enterAsRistoratore({
+      id: s.ristoranteId, ristoranteId: s.ristoranteId, email: s.email, nome: s.nome
+    });
+    // online ma il ristorante non esiste più: la sessione salvata non vale
+    if (!ok && navigator.onLine !== false) {
+      try { localStorage.removeItem('menupro_session'); } catch (e) {}
+    }
+  } catch (e) {
+    console.error('Ripristino sessione fallito:', e);
+    toast('Non sono riuscito a riaprire la sessione: accedi di nuovo');
+  } finally {
+    done();
   }
 })();
