@@ -826,6 +826,7 @@
   // ---------------------------------------------------
   // API pubblica
   // ---------------------------------------------------
+  try { console.info('[MenuPro] offline.js caricato (build sessione-v2)'); } catch (_) {}
   window.OFFLINE = {
     wrap: wrap,
     fetch: fetchWithTimeout,
