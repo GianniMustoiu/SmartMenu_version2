@@ -10,7 +10,26 @@
       } catch (e) {}
     })();
   </script>
+  <script>
+    (function () {
+      try {
+        var p = new URLSearchParams(location.search);
+        if (localStorage.getItem('menupro_session') && !(p.get('r') && p.get('t'))) {
+          document.documentElement.classList.add('restoring');
+          setTimeout(function () { document.documentElement.classList.remove('restoring'); }, 12000);
+        }
+      } catch (e) {}
+    })();
+  </script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#0b1220" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" type="image/png" href="icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="MenuPro" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <title>MenuPro – Demo Completa</title>
   <link rel="stylesheet" href="style.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
@@ -770,6 +789,7 @@
 <div id="toast" class="toast hidden"></div>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="config.js"></script>
+  <script src="offline.js"></script>
   <script src="script.js"></script>
 </body>
 </html>
